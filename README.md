@@ -33,7 +33,7 @@ SonicSage is an intelligent trading assistant built on the Sonic Virtual Machine
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sonicsage.git
+git clone https://github.com/arhansuba/sonicsage.git
 cd sonicsage
 
 # Install dependencies
