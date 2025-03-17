@@ -11,8 +11,9 @@ import {
   TokenSupportType,
   BacktestTimespan
 } from '../services/StrategyMarketplace';
-import { NotificationType } from '../services/NotificationService';
+
 import { useNotifications } from '../hooks/useNotifications';
+import { NotificationType } from '@/services/DeFiStrategyService';
 
 const riskLevelColors = {
   [RiskLevel.LOW]: 'bg-green-100 text-green-800',
@@ -368,7 +369,7 @@ const StrategyMarketplaceComponent: React.FC<StrategyMarketplaceProps> = ({
     } catch (error) {
       notifyMarketEvent(
         'Subscription Failed',
-        error.message || 'Failed to subscribe to strategy',
+        (error instanceof Error ? error.message : 'Failed to subscribe to strategy'),
         NotificationType.ERROR
       );
     }
@@ -857,7 +858,7 @@ const StrategyDetailModal: React.FC<StrategyDetailModalProps> = ({
                   : 'bg-gray-300 cursor-not-allowed'
               }`}
               onClick={handleSubscribe}
-              disabled={!isValid}
+              disabled={!isValid} 
             >
               Subscribe
             </button>
@@ -871,4 +872,4 @@ const StrategyDetailModal: React.FC<StrategyDetailModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>)};

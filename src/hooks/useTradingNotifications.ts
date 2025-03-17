@@ -4,13 +4,13 @@ import { useEffect, useRef } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { useNotifications } from './useNotifications';
-import { NotificationType, NotificationCategory } from '../services/NotificationService';
+import { NotificationType } from '@/types/notification';
 
 interface TradeDetails {
   signature: string;
   fromToken: string;
   fromTokenSymbol: string;
-  toToken: string;
+  toToken: string; 
   toTokenSymbol: string;
   fromAmount: number;
   toAmount: number;
@@ -41,7 +41,7 @@ export const useTradingNotifications = ({
 }: UseTradingNotificationsProps = {}) => {
   const { connection } = useConnection();
   const { publicKey } = useWallet();
-  const { notifyTrade, notifyMarketEvent } = useNotifications();
+  const { addNotification } = useNotifications();
   
   const pendingTransactions = useRef<Set<string>>(new Set());
   const subscriptions = useRef<Map<string, number>>(new Map());
@@ -67,16 +67,16 @@ export const useTradingNotifications = ({
     pendingTransactions.current.add(signature);
     
     // Notify that trade is executed but not confirmed
-    notifyTrade(
-      'Trade Submitted',
-      `Swapping ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toTokenSymbol}...`,
-      NotificationType.INFO,
-      {
+    addNotification({
+      type: NotificationType.INFO,
+      title: 'Trade Submitted',
+      message: `Swapping ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toTokenSymbol}...`,
+      data: {
         ...details,
         signature,
         status: 'pending'
       }
-    );
+    });
     
     if (onTradeExecuted) {
       onTradeExecuted({
@@ -95,33 +95,33 @@ export const useTradingNotifications = ({
         
         if (result.err) {
           // Trade failed
-          notifyTrade(
-            'Trade Failed',
-            `Failed to swap ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toTokenSymbol}`,
-            NotificationType.ERROR,
-            {
+          addNotification({
+            type: NotificationType.ERROR,
+            title: 'Trade Failed',
+            message: `Failed to swap ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toTokenSymbol}`,
+            data: {
               ...details,
               signature,
               error: result.err,
               status: 'failed'
             }
-          );
+          });
           
           if (onTradeFailed) {
             onTradeFailed(signature, JSON.stringify(result.err));
           }
         } else {
           // Trade confirmed
-          notifyTrade(
-            'Trade Confirmed',
-            `Successfully swapped ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toAmount} ${details.toTokenSymbol}`,
-            NotificationType.SUCCESS,
-            {
+          addNotification({
+            type: NotificationType.SUCCESS,
+            title: 'Trade Confirmed',
+            message: `Successfully swapped ${details.fromAmount} ${details.fromTokenSymbol} for ${details.toAmount} ${details.toTokenSymbol}`,
+            data: {
               ...details,
               signature,
               status: 'confirmed'
             }
-          );
+          });
           
           if (onTradeConfirmed) {
             onTradeConfirmed(signature);
@@ -156,17 +156,20 @@ export const useTradingNotifications = ({
         title = `${event.tokenSymbol} Market News`;
         type = NotificationType.INFO;
         break;
+      default:
+        title = `${event.tokenSymbol} Market Update`;
+        type = NotificationType.INFO;
     }
     
-    notifyMarketEvent(
-      title,
-      event.message,
+    addNotification({
       type,
-      {
+      title,
+      message: event.message,
+      data: {
         ...event,
         timestamp: Date.now()
       }
-    );
+    });
     
     if (onMarketEvent) {
       onMarketEvent(event);

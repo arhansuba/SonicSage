@@ -4,7 +4,7 @@ import React from 'react';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { PhantomWalletAdapter, SolflareWalletAdapter, BackpackWalletAdapter } from '@solana/wallet-adapter-wallets';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { clusterApiUrl } from '@solana/web3.js';
 import { SonicAgentProvider } from './contexts/SonicAgentContext';
 import SonicAgentDashboard from './components/SonicAgentDashboard';
@@ -20,7 +20,7 @@ const App: React.FC = () => {
   const wallets = React.useMemo(() => [
     new PhantomWalletAdapter(),
     new SolflareWalletAdapter(),
-    new BackpackWalletAdapter(),
+   
   ], []);
   
   // Set up endpoint

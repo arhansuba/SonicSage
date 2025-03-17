@@ -2,12 +2,20 @@
  * Custom React hooks for Sonic Agent
  */
 import { useEffect, useState } from 'react';
+
+// Extend the Window interface to include sonicAgent
+declare global {
+  interface Window {
+    sonicAgent: any;
+  }
+}
 import { MarketDataService } from '../services/MarketDataService';
 import { Portfolio, PortfolioPerformance } from '../types/defi';
-import { Notification } from '../types/notification';
-import NotificationService from '../services/NotificationService';
+// Use the Notification interface from the service instead of from types
+import { NotificationService, Notification } from '../services/NotificationService';
 import { ServiceFactory } from '../services/ServiceFactory';
-
+import { JupiterService } from '../services/JupiterService';
+ 
 /**
  * Hook to get market data
  */
@@ -21,13 +29,22 @@ export const useMarketData = (tokenAddresses: string[]) => {
       try {
         setLoading(true);
         
-        const marketDataService = ServiceFactory.getInstance().getMarketDataService();
+        // Create a new instance instead of using ServiceFactory
+        const connection = window.solana?.connection;
+        const jupiterService = new JupiterService(connection);
+        const marketDataService = new MarketDataService(connection, jupiterService);
         if (!marketDataService) {
           throw new Error("Market data service not initialized");
         }
         
-        const priceData = await marketDataService.getPrices(tokenAddresses);
-        setPrices(priceData);
+        const priceData = await marketDataService.getMultipleTokenPrices(tokenAddresses);
+        // Convert from Map to Record for easier component usage
+        const priceRecord: Record<string, number> = {};
+        priceData.forEach((price, mint) => {
+          priceRecord[mint] = price;
+        });
+        
+        setPrices(priceRecord);
         setError(null);
       } catch (err) {
         console.error("Error fetching market data:", err);
@@ -71,17 +88,20 @@ export const usePortfolio = (walletAddress?: string) => {
       try {
         setLoading(true);
         
-        const services = ServiceFactory.getInstance();
-        const portfolioService = services.getPortfolioService();
+        // Direct implementation instead of using ServiceFactory
+        // This is a temporary solution - you'll need to implement direct calls to your actual services
+        const sonicAgent = window.sonicAgent; // Assumes a global sonicAgent is available
         
-        if (!portfolioService) {
-          throw new Error("Portfolio service not initialized");
+        if (!sonicAgent) {
+          throw new Error("Sonic Agent not initialized");
         }
         
-        const portfolioData = await portfolioService.getPortfolio(walletAddress);
+        // Directly call methods on sonicAgent
+        const portfolioData = await sonicAgent.getPortfolio(walletAddress);
         setPortfolio(portfolioData);
         
-        const performanceData = await portfolioService.getPerformance(walletAddress);
+        // Assuming getPerformance is available on sonicAgent
+        const performanceData = await sonicAgent.getPerformance(walletAddress);
         setPerformance(performanceData);
         
         setError(null);
@@ -114,18 +134,21 @@ export const useNotifications = () => {
   useEffect(() => {
     const notificationService = NotificationService.getInstance();
     
+    // Cast the type to match the expected interface
     const handleNotificationsChange = (updatedNotifications: Notification[]) => {
       setNotifications(updatedNotifications);
       setUnreadCount(updatedNotifications.filter(n => !n.read).length);
     };
     
-    notificationService.addListener(handleNotificationsChange);
+    // Use the correct method signature based on your implementation
+    const removeListener = notificationService.addListener(handleNotificationsChange);
     
     // Initial notifications
-    handleNotificationsChange(notificationService.getNotifications());
+    setNotifications(notificationService.getNotifications());
+    setUnreadCount(notificationService.getUnreadCount());
     
     return () => {
-      notificationService.removeListener(handleNotificationsChange);
+      if (removeListener) removeListener();
     };
   }, []);
   
@@ -138,11 +161,23 @@ export const useNotifications = () => {
   };
   
   const clearAll = () => {
-    NotificationService.getInstance().clearAll();
+    NotificationService.getInstance().clearNotifications(); // Use the correct method name
   };
   
   const removeNotification = (id: string) => {
     NotificationService.getInstance().removeNotification(id);
+  };
+  
+  // Add function to create a new notification
+  const addNotification = (options: { 
+    type: any; 
+    title: string; 
+    message: string; 
+    data?: any;
+    read?: boolean;
+    link?: { url: string; text: string };
+  }) => {
+    return NotificationService.getInstance().addNotification(options);
   };
   
   return {
@@ -151,6 +186,7 @@ export const useNotifications = () => {
     markAsRead,
     markAllAsRead,
     clearAll,
-    removeNotification
+    removeNotification,
+    addNotification // Export the new function
   };
 };

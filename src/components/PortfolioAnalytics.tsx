@@ -5,9 +5,10 @@ import {
   Legend, ResponsiveContainer, PieChart, Pie, Cell 
 } from 'recharts';
 import { useSonicAgent } from '../contexts/SonicAgentContext';
-import TokenIcon from './common/TokenIcon';
-import { formatCurrency, formatPercent, formatChange } from '../utils/formatters';
+
+import { formatCurrency, formatPercentage } from '../utils/formatters';
 import { PORTFOLIO_HISTORY_DAYS, TOKEN_COLORS } from '../constants/config';
+import TokenIcon from './TokenIcon';
 
 // Token asset information in portfolio
 interface TokenAsset {
@@ -41,6 +42,20 @@ interface PortfolioHistoryPoint {
   timestamp: string;
   value: number;
 }
+
+// TokenIcon props interface
+interface TokenIconProps {
+  mint: string;
+  size: number;
+  className?: string;
+}
+
+/**
+ * Format rate change to 2 decimal places
+ */
+const formatRateChange = (value: number): string => {
+  return value.toFixed(2);
+};
 
 /**
  * Portfolio analytics component that displays detailed portfolio information
@@ -112,11 +127,14 @@ const PortfolioAnalytics: React.FC = () => {
             
             if (tokenInfo && tokenPrice) {
               // Get 24h price change
-              const changes = await marketDataService.getPriceChanges([mint]);
-              const change24h = changes[mint]?.change24h || 0;
+              // Changed to use getTokenPriceChanges method which should be available in MarketDataService
+              const changes = await marketDataService.getTokenPriceChanges([mint]);
+              const change24h = changes.get(mint)?.change24h || 0;
               
               // Calculate token value
-              const value = (balance / Math.pow(10, tokenInfo.decimals)) * tokenPrice;
+              // Ensure tokenPrice is treated as a number
+              const price = Number(tokenPrice);
+              const value = (balance / Math.pow(10, tokenInfo.decimals)) * price;
               
               // Add to total portfolio value
               totalPortfolioValue += value;
@@ -127,7 +145,7 @@ const PortfolioAnalytics: React.FC = () => {
                 symbol: tokenInfo.symbol,
                 name: tokenInfo.name,
                 balance: balance / Math.pow(10, tokenInfo.decimals),
-                price: tokenPrice,
+                price: price,
                 value,
                 allocation: 0, // Will be calculated after all tokens are processed
                 change24h,
@@ -384,7 +402,7 @@ const PortfolioAnalytics: React.FC = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
               </svg>
             )}
-            <span>{formatChange(summary.change24h)}% (24h)</span>
+            <span>{formatRateChange(summary.change24h)}% (24h)</span>
             <span className="ml-2">{formatCurrency(summary.change24hValue)}</span>
           </div>
         </div>
@@ -394,7 +412,7 @@ const PortfolioAnalytics: React.FC = () => {
           <p className="mt-2 text-3xl font-semibold">{summary.tokenCount}</p>
           <div className="mt-2 text-sm text-gray-400">
             <span className="font-medium">Largest: </span>
-            <span className="text-white">{summary.highestAllocation.symbol} ({formatPercent(summary.highestAllocation.allocation)})</span>
+            <span className="text-white">{summary.highestAllocation.symbol} ({formatPercentage(summary.highestAllocation.allocation)})</span>
           </div>
         </div>
 
@@ -411,7 +429,7 @@ const PortfolioAnalytics: React.FC = () => {
           <p className="mt-2 text-3xl font-semibold">
             {summary.bestPerformer.symbol ? (
               <span className={summary.bestPerformer.change >= 0 ? 'text-green-500' : 'text-red-500'}>
-                {formatChange(summary.bestPerformer.change)}%
+                {formatRateChange(summary.bestPerformer.change)}%
               </span>
             ) : (
               '--'
@@ -477,10 +495,10 @@ const PortfolioAnalytics: React.FC = () => {
                     dataKey="value"
                     nameKey="symbol"
                     labelLine={false}
-                    label={({ symbol, allocation }) => `${symbol} (${formatPercent(allocation)})`}
+                    label={({ symbol, allocation }) => `${symbol} (${formatPercentage(allocation)})`}
                   >
                     {assets.slice(0, 10).map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={TOKEN_COLORS[index % TOKEN_COLORS.length]} />
+                      <Cell key={`cell-${index}`} fill={Object.values(TOKEN_COLORS)[index % Object.values(TOKEN_COLORS).length]} />
                     ))}
                   </Pie>
                   <Tooltip
@@ -496,7 +514,7 @@ const PortfolioAnalytics: React.FC = () => {
                   <div key={asset.mint} className="flex items-center">
                     <div 
                       className="h-3 w-3 mr-2 rounded-full" 
-                      style={{ backgroundColor: TOKEN_COLORS[index % TOKEN_COLORS.length] }}
+                      style={{ backgroundColor: Object.values(TOKEN_COLORS)[index % Object.values(TOKEN_COLORS).length] }}
                     />
                     <span className="text-sm truncate">{asset.symbol}</span>
                   </div>
@@ -521,7 +539,7 @@ const PortfolioAnalytics: React.FC = () => {
                   <div className="text-right">
                     <p className="font-medium">{formatCurrency(asset.value)}</p>
                     <p className={`text-sm ${asset.change24h >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                      {formatChange(asset.change24h)}%
+                      {formatRateChange(asset.change24h)}%
                     </p>
                   </div>
                 </div>
@@ -777,7 +795,7 @@ const PortfolioAnalytics: React.FC = () => {
                             />
                           </svg>
                         )}
-                        {formatChange(asset.change24h)}%
+                        {formatRateChange(asset.change24h)}%
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-4">
@@ -787,7 +805,7 @@ const PortfolioAnalytics: React.FC = () => {
                       {formatCurrency(asset.value)}
                     </td>
                     <td className="whitespace-nowrap px-4 py-4 text-right">
-                      {formatPercent(asset.allocation)}
+                      {formatPercentage(asset.allocation)}
                     </td>
                   </tr>
                 ))}
@@ -862,7 +880,7 @@ const PortfolioAnalytics: React.FC = () => {
                   stroke="#9CA3AF"
                 />
                 <YAxis
-                  tickFormatter={(value) => formatCurrency(value, false)}
+                  tickFormatter={(value) => formatCurrency(value, "")}
                   stroke="#9CA3AF"
                 />
                 <Tooltip
@@ -915,10 +933,10 @@ const PortfolioAnalytics: React.FC = () => {
                   className={`mt-1 text-xl font-medium ${
                     filteredHistory[filteredHistory.length - 1].value >= filteredHistory[0].value
                       ? 'text-green-500'
-                      : 'text-red-500'
+                      : 'text-red-500' 
                   }`}
                 >
-                  {formatChange(
+                  {formatRateChange(
                     ((filteredHistory[filteredHistory.length - 1].value - filteredHistory[0].value) /
                       filteredHistory[0].value) *
                       100

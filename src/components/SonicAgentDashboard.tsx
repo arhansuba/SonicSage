@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { Connection, PublicKey } from '@solana/web3.js';
-import { useWallet, Wallet } from '@solana/wallet-adapter-react';
+import { Connection, PublicKey, Keypair } from '@solana/web3.js';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { Wallet } from '@coral-xyz/anchor';
 import { SonicAgent } from '../services/SonicAgent';
 import { JupiterService } from '../services/JupiterService';
 import { MarketDataService } from '../services/MarketDataService';
 import { JupiterTradingStrategy, TradeRecommendation } from '../services/JupiterTradingStrategy';
 import { PortfolioRebalancer, RebalanceAction } from '../services/PortfolioRebalancer';
 import { NotificationService, Notification } from '../services/NotificationService';
+import { NotificationType } from '../types/notification';
+import { Portfolio, PortfolioPerformance } from '../types/api';
+import { ENDPOINT_SONIC_RPC } from '../constants/endpoints';
 
 // Define interfaces for the data structures
 interface AgentConfig {
@@ -22,34 +26,26 @@ interface AgentConfig {
   rebalanceThreshold: number;
 }
 
-interface Asset {
-  symbol: string;
-  name: string;
-  balance: number;
-  usdValue: number;
-  decimals: number;
-}
+// Create a wallet adapter to bridge between wallet-adapter-react and @coral-xyz/anchor
+class AnchorWalletAdapter implements Wallet {
+  publicKey: PublicKey;
+  
+  constructor(public wallet: any) {
+    this.publicKey = wallet.publicKey;
+  }
 
-interface Portfolio {
-  totalValue: number;
-  assets: Asset[];
-}
+  async signTransaction<T>(tx: T): Promise<T> {
+    return await this.wallet.signTransaction(tx);
+  }
 
-interface PerformanceDataPoint {
-  timestamp: number;
-  value: number;
-  profitLoss: number;
-}
+  async signAllTransactions<T>(txs: T[]): Promise<T[]> {
+    return await this.wallet.signAllTransactions(txs);
+  }
 
-interface PortfolioPerformance {
-  percentageChange: number;
-  dataPoints: PerformanceDataPoint[];
-}
-
-interface Signal {
-  name: string;
-  impact: 'positive' | 'negative' | 'neutral';
-  description: string;
+  get payer(): Keypair {
+    // This is needed for the Anchor Wallet interface
+    return Keypair.fromSecretKey(this.wallet.secretKey);
+  }
 }
 
 interface Services {
@@ -63,11 +59,16 @@ interface Services {
 }
 
 // Initialize services
-const initializeServices = (wallet: Wallet): Services => {
-  const connection = new Connection('https://api.sonic.game/rpc', 'confirmed');
+const initializeServices = (wallet: any): Services => {
+  const connection = new Connection(ENDPOINT_SONIC_RPC, 'confirmed');
   const notificationService = NotificationService.getInstance();
   const sonicAgent = new SonicAgent(connection, notificationService);
-  const jupiterService = new JupiterService(connection, wallet, notificationService);
+  
+  // Create an adapter that implements the Anchor Wallet interface
+  const anchorWallet = new AnchorWalletAdapter(wallet);
+  
+  // Pass the API key as undefined since it's optional
+  const jupiterService = new JupiterService(connection, undefined, notificationService);
   const marketDataService = new MarketDataService(connection, jupiterService);
   const tradingStrategy = new JupiterTradingStrategy(
     connection,
@@ -113,7 +114,7 @@ const SonicAgentDashboard: React.FC = () => {
   // Initialize services when wallet is connected
   useEffect(() => {
     if (wallet && wallet.connected && wallet.publicKey) {
-      const services = initializeServices(wallet as Wallet);
+      const services = initializeServices(wallet);
       setServices(services);
       
       // Subscribe to notifications
@@ -163,11 +164,26 @@ const SonicAgentDashboard: React.FC = () => {
       
       // Load portfolio data
       const portfolio = await services.sonicAgent.getPortfolio(walletPublicKey);
-      setPortfolio(portfolio);
+      
+      // Convert timestamps from string to number if needed
+      if (portfolio) {
+        setPortfolio(portfolio);
+      }
       
       // Load portfolio performance
       const performance = await services.sonicAgent.getPortfolioPerformance(walletPublicKey);
-      setPortfolioPerformance(performance);
+      
+      // Convert timestamps from string to number if needed
+      if (performance) {
+        const convertedPerformance: PortfolioPerformance = {
+          ...performance,
+          dataPoints: performance.dataPoints.map(point => ({
+            ...point,
+            timestamp: typeof point.timestamp === 'string' ? new Date(point.timestamp).toISOString() : new Date(point.timestamp).toISOString()
+          }))
+        };
+        setPortfolioPerformance(convertedPerformance);
+      }
       
       // Check if portfolio needs rebalancing
       const needsRebalance = await services.portfolioRebalancer.checkRebalanceNeeded(walletPublicKey);
@@ -197,9 +213,13 @@ const SonicAgentDashboard: React.FC = () => {
     }
     
     try {
+      // Create an Anchor wallet adapter for the connected wallet
+      const anchorWallet = new AnchorWalletAdapter(wallet);
+      
+      // Call the strategy with the wallet public key and the Anchor wallet adapter
       const result = await services.tradingStrategy.executeTrade(
         wallet.publicKey.toString(),
-        wallet as Wallet,
+        anchorWallet,
         recommendation
       );
       
@@ -212,11 +232,9 @@ const SonicAgentDashboard: React.FC = () => {
     } catch (error) {
       console.error('Error executing trade:', error);
       services.notificationService.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Trade Failed',
-        message: error instanceof Error ? error.message : 'Error executing trade',
-        read: false,
-        timestamp: Date.now()
+        message: error instanceof Error ? error.message : 'Error executing trade'
       });
     }
   };
@@ -228,9 +246,12 @@ const SonicAgentDashboard: React.FC = () => {
     }
     
     try {
+      // Create an Anchor wallet adapter for the connected wallet
+      const anchorWallet = new AnchorWalletAdapter(wallet);
+      
       const result = await services.portfolioRebalancer.executeRebalance(
         wallet.publicKey.toString(),
-        wallet as Wallet,
+        anchorWallet,
         rebalanceActions
       );
       
@@ -243,11 +264,9 @@ const SonicAgentDashboard: React.FC = () => {
     } catch (error) {
       console.error('Error executing rebalance:', error);
       services.notificationService.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Rebalance Failed',
-        message: error instanceof Error ? error.message : 'Error executing rebalance',
-        read: false,
-        timestamp: Date.now()
+        message: error instanceof Error ? error.message : 'Error executing rebalance'
       });
     }
   };
@@ -273,11 +292,9 @@ const SonicAgentDashboard: React.FC = () => {
     } catch (error) {
       console.error('Error toggling agent status:', error);
       services.notificationService.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Error',
-        message: error instanceof Error ? error.message : 'Error toggling agent status',
-        read: false,
-        timestamp: Date.now()
+        message: error instanceof Error ? error.message : 'Error toggling agent status'
       });
     }
   };
@@ -486,7 +503,7 @@ const SonicAgentDashboard: React.FC = () => {
                       <Pie
                         data={portfolio.assets.map(asset => ({
                           name: asset.symbol,
-                          value: asset.usdValue
+                          value: asset.value // Use value instead of usdValue to match the API type
                         }))}
                         cx="50%"
                         cy="50%"
@@ -534,7 +551,7 @@ const SonicAgentDashboard: React.FC = () => {
                               </div>
                               <div>
                                 <div className="text-sm font-medium text-gray-900">{asset.symbol}</div>
-                                <div className="text-xs text-gray-500">{asset.name}</div>
+                                <div className="text-xs text-gray-500">{asset.name || asset.symbol}</div>
                               </div>
                             </div>
                           </td>
@@ -542,7 +559,7 @@ const SonicAgentDashboard: React.FC = () => {
                             {asset.balance.toFixed(asset.decimals === 6 ? 2 : 4)}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">
-                            ${asset.usdValue.toFixed(2)}
+                            ${asset.value.toFixed(2)}
                           </td>
                         </tr>
                       ))}

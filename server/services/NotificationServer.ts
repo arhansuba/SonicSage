@@ -2,10 +2,13 @@
 
 import WebSocket from 'ws';
 import http from 'http';
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { AnchorProvider, Program, web3 } from '@coral-xyz/anchor';
 import fs from 'fs';
 import path from 'path';
+import { HermesClient } from '@pythnetwork/hermes-client';
+import { v4 as uuidv4 } from 'uuid';
+import EventEmitter from 'events';
 
 // Types for notification events
 enum NotificationEventType {
@@ -106,7 +109,36 @@ interface ClientNotification {
   expiry?: number;
 }
 
-class NotificationServer {
+// Interface for price alerts
+interface PriceAlert {
+  id: string;
+  walletAddress: string;
+  priceFeedId: string;
+  targetPrice: number;
+  direction: 'above' | 'below';
+  notificationType: 'email' | 'push';
+  createdAt: string;
+  updatedAt: string;
+  triggered?: boolean;
+}
+
+// Interface for price alert update
+interface PriceAlertUpdate {
+  targetPrice?: number;
+  direction?: 'above' | 'below';
+  notificationType?: 'email' | 'push';
+}
+
+// Interface for price alert creation
+interface PriceAlertCreate {
+  walletAddress: string;
+  priceFeedId: string;
+  targetPrice: number;
+  direction: 'above' | 'below';
+  notificationType: 'email' | 'push';
+}
+
+class NotificationServer extends EventEmitter {
   private wss: WebSocket.Server;
   private clients: Map<string, Set<WebSocket>> = new Map();
   private connection: Connection;
@@ -114,8 +146,13 @@ class NotificationServer {
   private idl: any;
   private program: Program;
   private eventListeners: number[] = [];
+  private hermesClient: HermesClient;
+  private priceAlerts: PriceAlert[] = [];
+  private priceCheckInterval: NodeJS.Timeout | null = null;
+  private readonly PRICE_CHECK_INTERVAL_MS = 60000; // Check prices every minute
 
   constructor(server: http.Server) {
+    super();
     // Initialize WebSocket server
     this.wss = new WebSocket.Server({ server });
     
@@ -127,18 +164,27 @@ class NotificationServer {
     const idlPath = path.join(__dirname, '../idl/sonic_agent.json');
     this.idl = JSON.parse(fs.readFileSync(idlPath, 'utf8'));
     
-    // Create program instance
-    const provider = new AnchorProvider(
+    // Create program instance with properly typed wallet functions
+    const provider = new AnchorProvider(  
       this.connection, 
       {
         publicKey: new PublicKey('11111111111111111111111111111111'),
-        signTransaction: async (tx: web3.Transaction) => tx,
-        signAllTransactions: async (txs: web3.Transaction[]) => txs,
+        signTransaction: async <T extends Transaction | VersionedTransaction>(tx: T): Promise<T> => {
+          return tx;
+        },
+        signAllTransactions: async <T extends Transaction | VersionedTransaction>(txs: T[]): Promise<T[]> => {
+          return txs;
+        },
+        //connection: this.connection // Add this line to include the connection property
       },
       { commitment: 'confirmed' }
     );
-    this.program = new Program(this.idl, this.programId, provider);
     
+    this.program = new Program(this.idl,  provider);
+    
+    this.hermesClient = new HermesClient('https://hermes.pyth.network', {});
+    this.priceAlerts = [];
+
     this.setupWebSocketServer();
     this.registerEventListeners();
   }
@@ -367,6 +413,178 @@ class NotificationServer {
     this.wss.clients.forEach(client => {
       client.close();
     });
+  }
+
+  /**
+   * Start the notification server and price monitoring
+   */
+  public start(): void {
+    if (this.priceCheckInterval) {
+      clearInterval(this.priceCheckInterval);
+    }
+    
+    this.priceCheckInterval = setInterval(() => {
+      this.checkPriceAlerts();
+    }, this.PRICE_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * Stop the notification server
+   */
+  public stop(): void {
+    if (this.priceCheckInterval) {
+      clearInterval(this.priceCheckInterval);
+      this.priceCheckInterval = null;
+    }
+  }
+
+  /**
+   * Check all active price alerts and trigger notifications if conditions are met
+   */
+  private async checkPriceAlerts(): Promise<void> {
+    try {
+      // Get unique price feed IDs from all active alerts
+      const feedIds = [...new Set(
+        this.priceAlerts
+          .filter(alert => !alert.triggered)
+          .map(alert => alert.priceFeedId)
+      )];
+      
+      if (feedIds.length === 0) {
+        return;
+      }
+      
+      // Fetch latest prices for all feeds
+      const priceData = await this.hermesClient.getLatestPriceUpdates(feedIds);
+      
+      // Check that parsed data exists
+      if (!priceData || !priceData.parsed || !Array.isArray(priceData.parsed)) {
+        console.error('Invalid price data format returned from Hermes');
+        return;
+      }
+      
+      // Check each alert against current prices
+      for (const alert of this.priceAlerts) {
+        if (alert.triggered) {
+          continue;
+        }
+        
+        const feedData = priceData.parsed.find(feed => feed.id === alert.priceFeedId);
+        
+        if (!feedData || !feedData.price || 
+            typeof feedData.price.price !== 'number' || 
+            typeof feedData.price.expo !== 'number') {
+          continue;
+        }
+        
+        const currentPrice = feedData.price.price * (10 ** feedData.price.expo);
+        
+        // Check if alert conditions are met
+        if (
+          (alert.direction === 'above' && currentPrice >= alert.targetPrice) ||
+          (alert.direction === 'below' && currentPrice <= alert.targetPrice)
+        ) {
+          // Trigger notification
+          this.triggerAlert(alert, currentPrice);
+          
+          // Mark alert as triggered
+          alert.triggered = true;
+        }
+      }
+    } catch (error) {
+      console.error('Error checking price alerts:', error);
+    }
+  }
+
+  /**
+   * Trigger a notification for an alert
+   */
+  private triggerAlert(alert: PriceAlert, currentPrice: number): void {
+    // In a real implementation, this would send emails or push notifications
+    console.log(`ALERT TRIGGERED: ${alert.priceFeedId} price is now ${currentPrice}, which is ${alert.direction} the target of ${alert.targetPrice}`);
+    
+    // Emit event for handling in other parts of the application
+    this.emit('alertTriggered', {
+      alert,
+      currentPrice,
+      triggeredAt: new Date().toISOString()
+    });
+  }
+
+  /**
+   * Get all price alerts for a wallet address
+   */
+  public async getPriceAlerts(walletAddress: string): Promise<PriceAlert[]> {
+    return this.priceAlerts.filter(alert => alert.walletAddress === walletAddress);
+  }
+
+  /**
+   * Get a specific price alert by ID
+   */
+  public async getPriceAlert(alertId: string): Promise<PriceAlert | null> {
+    return this.priceAlerts.find(alert => alert.id === alertId) || null;
+  }
+
+  /**
+   * Create a new price alert
+   */
+  public async createPriceAlert(alertData: PriceAlertCreate): Promise<string> {
+    const id = uuidv4();
+    const now = new Date().toISOString();
+    
+    const newAlert: PriceAlert = {
+      id,
+      ...alertData,
+      createdAt: now,
+      updatedAt: now
+    };
+    
+    this.priceAlerts.push(newAlert);
+    
+    return id;
+  }
+
+  /**
+   * Update an existing price alert
+   */
+  public async updatePriceAlert(
+    alertId: string,
+    walletAddress: string,
+    updates: PriceAlertUpdate
+  ): Promise<boolean> {
+    const alertIndex = this.priceAlerts.findIndex(
+      alert => alert.id === alertId && alert.walletAddress === walletAddress
+    );
+    
+    if (alertIndex === -1) {
+      return false;
+    }
+    
+    // Update the alert with the provided changes
+    this.priceAlerts[alertIndex] = {
+      ...this.priceAlerts[alertIndex],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    
+    return true;
+  }
+
+  /**
+   * Delete a price alert
+   */
+  public async deletePriceAlert(alertId: string, walletAddress: string): Promise<boolean> {
+    const alertIndex = this.priceAlerts.findIndex(
+      alert => alert.id === alertId && alert.walletAddress === walletAddress
+    );
+    
+    if (alertIndex === -1) {
+      return false;
+    }
+    
+    this.priceAlerts.splice(alertIndex, 1);
+    
+    return true;
   }
 }
 

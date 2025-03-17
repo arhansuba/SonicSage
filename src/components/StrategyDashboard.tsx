@@ -3,10 +3,12 @@
 import React, { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { AIStrategyService } from '../services/AIStrategyService';
-import { TradingStrategy } from '../services/StrategyMarketplace';
+import { TradingStrategy, RiskLevel, TimeHorizon, AIModelType, TokenSupportType } from '../services/StrategyMarketplace';
 import { useNotifications } from '../hooks/useNotifications';
-import { NotificationType } from '../services/NotificationService';
+import { NotificationType } from '../types/notification';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { Connection } from '@solana/web3.js';
+import { ENDPOINT_SONIC_RPC } from '../constants/endpoints';
 
 interface PerformanceData {
   date: string;
@@ -34,34 +36,6 @@ const StrategyDashboard: React.FC = () => {
   const [totalReturns, setTotalReturns] = useState<number>(0);
   const [selectedStrategy, setSelectedStrategy] = useState<StrategyPerformance | null>(null);
   
-  // Generate mock performance data
-  const generatePerformanceData = (
-    days: number,
-    startValue: number,
-    volatility: number,
-    trend: number
-  ): PerformanceData[] => {
-    const data: PerformanceData[] = [];
-    let currentValue = startValue;
-    
-    const now = new Date();
-    for (let i = days; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i);
-      
-      // Add some randomness with trend
-      const change = (Math.random() - 0.5) * volatility + trend;
-      currentValue = currentValue * (1 + change / 100);
-      
-      data.push({
-        date: date.toISOString().split('T')[0],
-        value: parseFloat(currentValue.toFixed(2))
-      });
-    }
-    
-    return data;
-  };
-  
   // Fetch user's strategies
   useEffect(() => {
     const fetchStrategies = async () => {
@@ -75,114 +49,49 @@ const StrategyDashboard: React.FC = () => {
       try {
         setIsLoading(true);
         
-        // In a real implementation, this would call the actual AIStrategyService
-        // For demo purposes, we'll simulate the data
+        // Initialize services
+        const connection = new Connection(ENDPOINT_SONIC_RPC, 'confirmed');
+        const aiStrategyService = AIStrategyService.getInstance(connection);
         
-        // Simulate subscribed strategies
-        const mockSubscribedStrategies: StrategyPerformance[] = [
-          {
-            strategy: {
-              id: 'momentum-ml-strategy',
-              name: 'AI Momentum Alpha',
-              description: 'Employs machine learning to identify short-term momentum patterns in major tokens.',
-              creatorAddress: 'AiXZdnAMYcdnAvc54Cd55555Z7777aaaa3333333',
-              creatorName: 'Quantum Quant Labs',
-              verified: true,
-              riskLevel: 'medium',
-              timeHorizon: 'short_term',
-              aiModels: ['momentum', 'sentiment'],
-              tokenSupport: 'major_only',
-              activeUsers: 3245,
-              tvl: 2450000,
-              feePercentage: 1.5,
-              performanceFee: 10,
-              backtestResults: [],
-              lastUpdated: '2024-10-18T14:30:00Z',
-              tags: ['momentum', 'machine learning', 'sentiment', 'short-term'],
-              contractAddress: 'Mo77777777777771111111111111111UUUUUUUUuu',
-              minInvestment: 500,
-              version: '2.1.0',
-              compatibleWith: ['SonicAgent', 'Jupiter', 'Orca']
-            },
-            investment: 1500,
-            currentValue: 1725,
-            returns: 15,
-            subscriptionDate: '2024-09-15T10:30:00Z',
-            performanceData: generatePerformanceData(30, 1500, 2, 0.5)
-          },
-          {
-            strategy: {
-              id: 'conservative-ai-portfolio',
-              name: 'StableGrowth AI',
-              description: 'A conservative portfolio management strategy using AI to maintain balanced exposure across major tokens.',
-              creatorAddress: 'SG777777777777771111111111111111UUUUUUUUuu',
-              creatorName: 'Guardian Quant',
-              verified: true,
-              riskLevel: 'low',
-              timeHorizon: 'long_term',
-              aiModels: ['multi_factor', 'market_regime'],
-              tokenSupport: 'major_only',
-              activeUsers: 4250,
-              tvl: 8500000,
-              feePercentage: 1.0,
-              performanceFee: 10,
-              backtestResults: [],
-              lastUpdated: '2024-10-26T12:15:00Z',
-              tags: ['conservative', 'portfolio', 'balanced', 'capital preservation'],
-              contractAddress: 'SG77777777777771111111111111111UUUUUUUUuu',
-              minInvestment: 500,
-              version: '3.1.2',
-              compatibleWith: ['SonicAgent', 'Jupiter', 'Marinade Finance']
-            },
-            investment: 2000,
-            currentValue: 2120,
-            returns: 6,
-            subscriptionDate: '2024-09-20T14:45:00Z',
-            performanceData: generatePerformanceData(30, 2000, 1, 0.2)
-          }
-        ];
+        // Fetch user created strategies
+        const userCreatedStrategies = await aiStrategyService.getUserCreatedStrategies();
+        setCreatedStrategies(userCreatedStrategies);
         
-        // Simulate created strategies
-        const mockCreatedStrategies: TradingStrategy[] = [
-          {
-            id: 'custom-momentum-ai',
-            name: 'Custom Momentum AI',
-            description: 'My custom momentum strategy using machine learning.',
-            creatorAddress: publicKey.toString(),
-            creatorName: 'You',
-            verified: false,
-            riskLevel: 'medium',
-            timeHorizon: 'medium_term',
-            aiModels: ['momentum', 'pattern_recognition'],
-            tokenSupport: 'major_and_medium',
-            activeUsers: 12,
-            tvl: 15000,
-            feePercentage: 2.0,
-            performanceFee: 15,
-            backtestResults: [],
-            lastUpdated: '2024-10-10T09:20:00Z',
-            tags: ['momentum', 'custom', 'medium-term'],
-            contractAddress: 'YO77777777777771111111111111111UUUUUUUUuu',
-            minInvestment: 100,
-            version: '1.0.0',
-            compatibleWith: ['SonicAgent']
-          }
-        ];
+        // Fetch strategies user is subscribed to
+        const userSubscribedStrategies = await aiStrategyService.getUserSubscribedStrategies();
         
-        setSubscribedStrategies(mockSubscribedStrategies);
-        setCreatedStrategies(mockCreatedStrategies);
+        // Fetch performance data for each strategy
+        const strategyPerformanceData: StrategyPerformance[] = await Promise.all(
+          userSubscribedStrategies.map(async (strategy) => {
+            const performance = await aiStrategyService.getStrategyPerformance(
+              strategy.contractAddress || strategy.id,
+              publicKey.toString()
+            );
+            
+            return {
+              strategy,
+              investment: performance.userInvestment || 0,
+              currentValue: performance.userCurrentValue || 0,
+              returns: performance.userReturns || 0,
+              subscriptionDate: performance.userSubscriptionDate || new Date().toISOString(),
+              performanceData: [] // This would come from a real API that provides historical data
+            };
+          })
+        );
+        
+        setSubscribedStrategies(strategyPerformanceData);
         
         // Calculate totals
-        const totalInv = mockSubscribedStrategies.reduce((sum, strategy) => sum + strategy.investment, 0);
-        const totalVal = mockSubscribedStrategies.reduce((sum, strategy) => sum + strategy.currentValue, 0);
+        const totalInv = strategyPerformanceData.reduce((sum, strategy) => sum + strategy.investment, 0);
+        const totalVal = strategyPerformanceData.reduce((sum, strategy) => sum + strategy.currentValue, 0);
         
         setTotalInvestment(totalInv);
         setTotalValue(totalVal);
-        setTotalReturns(((totalVal / totalInv) - 1) * 100);
+        setTotalReturns(totalInv > 0 ? ((totalVal / totalInv) - 1) * 100 : 0);
         
         // Set default selected strategy
-        if (mockSubscribedStrategies.length > 0) {
-          setSelectedStrategy(mockSubscribedStrategies[0]);
+        if (strategyPerformanceData.length > 0) {
+          setSelectedStrategy(strategyPerformanceData[0]);
         }
       } catch (error) {
         console.error('Error fetching strategies:', error);
@@ -203,9 +112,16 @@ const StrategyDashboard: React.FC = () => {
   // Handle unsubscribe from strategy
   const handleUnsubscribe = async (strategy: TradingStrategy) => {
     try {
-      // In a real implementation, this would call the actual AIStrategyService
+      const connection = new Connection(ENDPOINT_SONIC_RPC, 'confirmed');
+      const aiStrategyService = AIStrategyService.getInstance(connection);
       
-      // Simulate unsubscribe
+      // Call the real unsubscribe method
+      await aiStrategyService.unsubscribeFromStrategy(
+        strategy.contractAddress || '',
+        'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'  // Default USDC mint
+      );
+      
+      // Update local state after successful unsubscription
       setSubscribedStrategies(prevStrategies => 
         prevStrategies.filter(s => s.strategy.id !== strategy.id)
       );
@@ -310,6 +226,7 @@ const StrategyDashboard: React.FC = () => {
                     className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium"
                     onClick={() => {
                       // Navigate to strategy marketplace
+                      window.location.href = '/strategy-marketplace';
                     }}
                   >
                     Browse Strategies
@@ -381,19 +298,19 @@ const StrategyDashboard: React.FC = () => {
                         <p className="text-sm text-gray-500">{selectedStrategy.strategy.description}</p>
                       </div>
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        selectedStrategy.strategy.riskLevel === 'low'
+                        selectedStrategy.strategy.riskLevel === RiskLevel.LOW
                           ? 'bg-green-100 text-green-800'
-                          : selectedStrategy.strategy.riskLevel === 'medium'
+                          : selectedStrategy.strategy.riskLevel === RiskLevel.MEDIUM
                             ? 'bg-blue-100 text-blue-800'
-                            : selectedStrategy.strategy.riskLevel === 'high'
+                            : selectedStrategy.strategy.riskLevel === RiskLevel.HIGH
                               ? 'bg-yellow-100 text-yellow-800'
                               : 'bg-red-100 text-red-800'
                       }`}>
-                        {selectedStrategy.strategy.riskLevel === 'low'
+                        {selectedStrategy.strategy.riskLevel === RiskLevel.LOW
                           ? 'Low Risk'
-                          : selectedStrategy.strategy.riskLevel === 'medium'
+                          : selectedStrategy.strategy.riskLevel === RiskLevel.MEDIUM
                             ? 'Medium Risk'
-                            : selectedStrategy.strategy.riskLevel === 'high'
+                            : selectedStrategy.strategy.riskLevel === RiskLevel.HIGH
                               ? 'High Risk'
                               : 'Very High Risk'
                         }
@@ -426,33 +343,39 @@ const StrategyDashboard: React.FC = () => {
                     <div className="mt-6">
                       <h5 className="text-sm font-medium text-gray-700 mb-2">Performance Chart</h5>
                       <div className="h-64">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart
-                            data={selectedStrategy.performanceData}
-                            margin={{ top: 5, right: 20, left: 20, bottom: 5 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis 
-                              dataKey="date"
-                              tickFormatter={(date) => {
-                                const d = new Date(date);
-                                return `${d.getMonth() + 1}/${d.getDate()}`;
-                              }}
-                            />
-                            <YAxis />
-                            <Tooltip
-                              formatter={(value) => [`${value}`, 'Value']}
-                              labelFormatter={(date) => new Date(date).toLocaleDateString()}
-                            />
-                            <Area 
-                              type="monotone" 
-                              dataKey="value" 
-                              stroke="#3b82f6" 
-                              fill="#93c5fd" 
-                              fillOpacity={0.3}
-                            />
-                          </AreaChart>
-                        </ResponsiveContainer>
+                        {selectedStrategy.performanceData.length > 0 ? (
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart
+                              data={selectedStrategy.performanceData}
+                              margin={{ top: 5, right: 20, left: 20, bottom: 5 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis 
+                                dataKey="date"
+                                tickFormatter={(date) => {
+                                  const d = new Date(date);
+                                  return `${d.getMonth() + 1}/${d.getDate()}`;
+                                }}
+                              />
+                              <YAxis />
+                              <Tooltip
+                                formatter={(value) => [`${value}`, 'Value']}
+                                labelFormatter={(date) => new Date(date).toLocaleDateString()}
+                              />
+                              <Area 
+                                type="monotone" 
+                                dataKey="value" 
+                                stroke="#3b82f6" 
+                                fill="#93c5fd" 
+                                fillOpacity={0.3}
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        ) : (
+                          <div className="flex items-center justify-center h-full bg-gray-50 rounded-md">
+                            <p className="text-gray-500">Performance data is being fetched...</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -464,9 +387,9 @@ const StrategyDashboard: React.FC = () => {
                         <div className="flex justify-between">
                           <span className="text-gray-500">Time Horizon</span>
                           <span className="font-medium">
-                            {selectedStrategy.strategy.timeHorizon === 'short_term'
+                            {selectedStrategy.strategy.timeHorizon === TimeHorizon.SHORT_TERM
                               ? 'Short Term'
-                              : selectedStrategy.strategy.timeHorizon === 'medium_term'
+                              : selectedStrategy.strategy.timeHorizon === TimeHorizon.MEDIUM_TERM
                                 ? 'Medium Term'
                                 : 'Long Term'
                             }
@@ -569,6 +492,7 @@ const StrategyDashboard: React.FC = () => {
                         className="flex-1 text-xs font-medium py-1 px-3 border border-gray-300 rounded-md text-gray-700 bg-white hover:bg-gray-50"
                         onClick={() => {
                           // View strategy details
+                          window.location.href = `/strategy/${strategy.id}`;
                         }}
                       >
                         View Details
@@ -577,6 +501,7 @@ const StrategyDashboard: React.FC = () => {
                         className="flex-1 text-xs font-medium py-1 px-3 border border-transparent rounded-md text-white bg-blue-600 hover:bg-blue-700"
                         onClick={() => {
                           // Edit strategy
+                          window.location.href = `/strategy/edit/${strategy.id}`;
                         }}
                       >
                         Edit Strategy
@@ -592,11 +517,12 @@ const StrategyDashboard: React.FC = () => {
                   <h3 className="mt-2 text-sm font-medium text-gray-900">Create a new strategy</h3>
                   <p className="mt-1 text-sm text-gray-500">
                     Develop your own AI trading strategy and earn fees from subscribers
-                  </p>
+                  </p> 
                   <button
                     className="mt-4 px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
                     onClick={() => {
                       // Navigate to strategy creation
+                      window.location.href = '/strategy/create';
                     }}
                   >
                     Create Strategy

@@ -1,91 +1,55 @@
-/**
- * Authentication middleware for API routes
- */
-
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-
-// JWT secret from environment variable
-const JWT_SECRET = process.env.JWT_SECRET || 'sonic-agent-development-secret';
-
-// Error class for authentication errors
-export class AuthError extends Error {
-  statusCode: number;
-  code: string;
-  
-  constructor(message: string, statusCode = 401, code = 'UNAUTHORIZED') {
-    super(message);
-    this.statusCode = statusCode;
-    this.code = code;
-    this.name = 'AuthError';
-  }
-}
-
-// Interface for JWT payload
-interface JwtPayload {
-  walletAddress: string;
-  exp: number;
-}
+import { PublicKey } from '@solana/web3.js';
+import * as nacl from 'tweetnacl';
+import { validateSignature } from '../utils/validation';
 
 /**
- * Authentication middleware to verify JWT token
+ * Authentication middleware for Solana wallet-based authentication
+ * Verifies that the request contains a valid signature from the wallet
  */
-export const authenticateRequest = (req: Request, res: Response, next: NextFunction) => {
-  // Check if authentication is disabled for development
-  if (process.env.NODE_ENV === 'development' && process.env.DISABLE_AUTH === 'true') {
-    return next();
-  }
-  
+export const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // Get token from Authorization header
     const authHeader = req.headers.authorization;
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new AuthError('Authorization header missing or invalid');
+    if (!authHeader) {
+      return res.status(401).json({ error: 'Authorization header missing' });
     }
     
-    const token = authHeader.split(' ')[1];
+    // Format: "Bearer {walletAddress}:{signature}:{message}"
+    const [bearer, authData] = authHeader.split(' ');
     
-    if (!token) {
-      throw new AuthError('JWT token missing');
+    if (bearer !== 'Bearer' || !authData) {
+      return res.status(401).json({ error: 'Invalid authorization format' });
     }
     
-    // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const [walletAddress, signature, message] = authData.split(':');
     
-    // Add wallet address to request
-    (req as any).walletAddress = decoded.walletAddress;
+    if (!walletAddress || !signature || !message) {
+      return res.status(401).json({ error: 'Invalid authorization data format' });
+    }
+    
+    // Validate wallet address format
+    try {
+      new PublicKey(walletAddress);
+    } catch (error) {
+      return res.status(401).json({ error: 'Invalid wallet address' });
+    }
+    
+    // Verify signature
+    const isValid = await validateSignature(walletAddress, signature, message);
+    
+    if (!isValid) {
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+    
+    // Attach user data to request for use in route handlers
+    req.user = {
+      walletAddress
+    };
     
     next();
   } catch (error) {
-    if (error instanceof jwt.JsonWebTokenError) {
-      next(new AuthError('Invalid token'));
-    } else if (error instanceof jwt.TokenExpiredError) {
-      next(new AuthError('Token expired'));
-    } else {
-      next(error);
-    }
+    console.error('Authentication error:', error);
+    res.status(500).json({ error: 'Authentication failed' });
   }
-};
-
-/**
- * Generate JWT token for wallet address
- */
-export const generateToken = (walletAddress: string, expiresIn = '24h'): string => {
-  return jwt.sign({ walletAddress }, JWT_SECRET, { expiresIn });
-};
-
-/**
- * Verify wallet ownership using signed message
- * This would normally verify a signed message against the wallet address
- * For this example, we're just returning true
- */
-export const verifyWalletOwnership = async (
-  walletAddress: string,
-  signedMessage: string,
-  message: string
-): Promise<boolean> => {
-  // In a real implementation, this would verify the signature
-  // For this example, we're just returning true
-  return true;
 };

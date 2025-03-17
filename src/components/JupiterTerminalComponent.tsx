@@ -4,11 +4,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 
 // Jupiter Terminal types
-declare global {
-  interface Window {
-    Jupiter: any;
-  }
-}
 
 type DisplayMode = 'modal' | 'integrated' | 'widget';
 

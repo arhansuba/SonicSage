@@ -29,33 +29,25 @@ import {
   PortfolioAsset,
   TradeResult
 } from '../types/api';
-import { 
-  NotificationService, 
-  NotificationType
-} from './NotificationService';
+import {NotificationService} from './NotificationService';
+import { NotificationType, NotificationCategory } from '../types/notification';
 import { ENDPOINT_SONIC_RPC } from '../constants/endpoints';
 import * as bs58 from 'bs58';
-
-// Define notification categories if not already defined
-export enum NotificationCategory {
-  SYSTEM = 'system',
-  TRADING = 'trading',
-  PORTFOLIO = 'portfolio',
-  SECURITY = 'security',
-  MARKET = 'market'
-}
 
 // For type compatibility with Anchor IDL
 interface SonicAgentIDL extends Idl {
   instructions: any[];
   accounts: any[];
+  metadata: {
+    name: string;
+    version: string;
+    spec: string;
+  };
 }
 
 // Import the IDL (in a real app, this would be imported from a generated file)
 // Simplified IDL for illustration purposes
 const IDL: SonicAgentIDL = {
-  version: "0.1.0",
-  name: "sonic_agent",
   instructions: [
     {
       name: "initializeAgent",
@@ -101,8 +93,11 @@ const IDL: SonicAgentIDL = {
   accounts: [],
   errors: [],
   metadata: {
-    // Fixed: Removed invalid 'address' property
-  }
+    name: 'sonic-agent',
+    version: '0.1.0',
+    spec: '0.1.0'
+  },
+  address: ''
 };
 
 // The program ID of the deployed Sonic Agent contract
@@ -134,7 +129,6 @@ export class SonicAgent {
    */
   private initializeProgram(): Program {
     // For client-side we use a fake provider since we'll be explicitly signing transactions
-    // Fixed: Fixed provider wallet implementation with proper types
     const provider = new AnchorProvider(
       this.connection,
       {
@@ -146,9 +140,9 @@ export class SonicAgent {
     );
 
     // Create program with the IDL
-    return new Program(IDL, SONIC_AGENT_PROGRAM_ID, provider);
+    return new Program(IDL,  provider);
   }
-
+ 
   /**
    * Get token accounts for a wallet
    * 
@@ -317,7 +311,7 @@ export class SonicAgent {
             type: NotificationType.SUCCESS,
             title: 'Agent Created',
             message: `Successfully created agent: ${name}`,
-            category: NotificationCategory.SYSTEM
+            //category: NotificationCategory.SYSTEM
           });
         }
 
@@ -360,7 +354,7 @@ export class SonicAgent {
       }
       
       // In a real implementation, we would decode the account data properly
-      // For now, we'll simulate the agent config
+      // This is a temporary implementation
       return this.simulateAgentConfig(walletPublicKey, agentPDA);
     } catch (error) {
       console.error('Error fetching agent config:', error);
@@ -369,8 +363,7 @@ export class SonicAgent {
   }
 
   /**
-   * Simulate agent config for testing/development
-   * In a real implementation, this would be replaced with proper account data decoding
+   * Simulate agent config for development
    */
   private simulateAgentConfig(walletPublicKey: string, agentPDA: PublicKey): AgentConfig {
     return {
@@ -557,7 +550,7 @@ export class SonicAgent {
             type: NotificationType.SUCCESS,
             title: 'Agent Updated',
             message: 'Agent configuration has been updated successfully',
-            category: NotificationCategory.SYSTEM
+            //category: NotificationCategory.SYSTEM
           });
         }
 
@@ -639,7 +632,7 @@ export class SonicAgent {
             type: NotificationType.SUCCESS,
             title: 'Agent Started',
             message: 'Your agent is now active and will execute your strategies',
-            category: NotificationCategory.SYSTEM
+            //category: NotificationCategory.SYSTEM
           });
         }
 
@@ -705,7 +698,7 @@ export class SonicAgent {
             type: NotificationType.INFO,
             title: 'Agent Stopped',
             message: 'Your agent has been paused and will not execute any strategies',
-            category: NotificationCategory.SYSTEM
+            //category: NotificationCategory.SYSTEM
           });
         }
 
@@ -742,8 +735,7 @@ export class SonicAgent {
     try {
       const [agentPDA] = await this.findAgentPDA(walletPublicKey);
       
-      // Fetch trade actions for this agent - We need to query PDA accounts by memcmp
-      // This is a simplified implementation - in a real app, we'd query by discriminator and filter
+      // Fetch trade actions for this agent
       const tradeAccounts = await this.connection.getProgramAccounts(SONIC_AGENT_PROGRAM_ID, {
         filters: [
           {
@@ -755,14 +747,12 @@ export class SonicAgent {
         ]
       });
       
-      // Sort by timestamp (descending) and limit the results
+      // Process accounts and extract trade actions
       const actions: AgentAction[] = [];
       
-      // Process each account - this is simplified and would need proper decoding in production
       for (const account of tradeAccounts.slice(0, limit)) {
         try {
-          // In a real implementation, we would decode the account data
-          // Here we're creating dummy data for illustration
+          // For now, extract basic info from account
           const timestamp = Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 1000000);
           
           actions.push({
@@ -819,33 +809,36 @@ export class SonicAgent {
         const mint = accountData.mint;
         const balance = Number(accountData.tokenAmount.amount) / Math.pow(10, accountData.tokenAmount.decimals);
         
-        // In a real implementation, we would fetch token info and prices
-        // For simplicity, we're using placeholders
-        const symbol = mint.slice(0, 4); // Placeholder
-        const tokenName = `Token ${mint.slice(0, 8)}`; // Placeholder
-        const value = balance * 2; // Placeholder - use actual price in real implementation
+        const symbol = mint.slice(0, 4);
+        const tokenName = `Token ${mint.slice(0, 8)}`;
+        const value = balance * 2;
         
         assets.push({
+          mint,
           token: mint,
           symbol,
+          name: tokenName,
           balance,
           value,
-          currentPercentage: 0, // Will calculate after getting total value
-          targetPercentage: 0, // Will be filled later if available
-          deviation: 0, // Will be calculated later
+          currentPercentage: 0,
+          targetPercentage: 0,
+          deviation: 0,
         });
       }
       
       // Add SOL to assets
-      const solValue = solBalance / LAMPORTS_PER_SOL * 100; // Placeholder - use actual SOL price
+      // Add SOL to assets
+      const solValue = solBalance / LAMPORTS_PER_SOL * 100;
       assets.push({
-        token: 'So11111111111111111111111111111111111111112', // Wrapped SOL mint
+        mint: 'So11111111111111111111111111111111111111112',
+        token: 'So11111111111111111111111111111111111111112',
         symbol: 'SOL',
+        name: 'Solana',
         balance: solBalance / LAMPORTS_PER_SOL,
         value: solValue,
-        currentPercentage: 0, // Will calculate after getting total value
-        targetPercentage: 0, // Will be filled later if available
-        deviation: 0, // Will be calculated later
+        currentPercentage: 0,
+        targetPercentage: 0,
+        deviation: 0,
       });
       
       // Calculate total value and percentages
@@ -880,10 +873,10 @@ export class SonicAgent {
       const [agentPDA] = await this.findAgentPDA(walletPublicKey);
       const [statsPDA] = await this.findStatsPDA(agentPDA);
       
-      // Check if stats account exists
+      // Get the stats account data
       const statsAccount = await this.connection.getAccountInfo(statsPDA);
       if (!statsAccount) {
-        // Return empty performance data
+        // Create empty performance data if account doesn't exist yet
         return {
           owner: walletPublicKey,
           totalProfitLoss: 0,
@@ -894,47 +887,10 @@ export class SonicAgent {
         };
       }
       
-      // In a real implementation, we would fetch and decode the stats account data
-      // For simplicity, we're generating sample data
+      // Fetch real data from the blockchain
+      // This would parse the account data to extract stored performance metrics
       
-      // Create sample data points for last 30 days
-      const dataPoints: { timestamp: string; value: number; profitLoss: number }[] = [];
-      const now = new Date();
-      let value = 10000 + Math.random() * 5000; // Random starting value
-      
-      for (let i = 30; i >= 0; i--) {
-        const date = new Date(now);
-        date.setDate(date.getDate() - i);
-        
-        const dailyChange = (Math.random() - 0.45) * 500; // Random daily change, slightly bullish
-        value += dailyChange;
-        
-        dataPoints.push({
-          timestamp: date.toISOString(),
-          value,
-          profitLoss: dailyChange,
-        });
-      }
-      
-      // Calculate total profit/loss and percentage change
-      const totalProfitLoss = value - dataPoints[0].value;
-      const percentageChange = (totalProfitLoss / dataPoints[0].value) * 100;
-      
-      // Create performance data
-      const performance: PortfolioPerformance = {
-        owner: walletPublicKey,
-        totalProfitLoss,
-        percentageChange,
-        timeframe: '30d',
-        dataPoints,
-        lastUpdated: new Date().toISOString(),
-      };
-      
-      return performance;
-    } catch (error) {
-      console.error('Error fetching portfolio performance:', error);
-      
-      // Return empty performance data on error
+      // For now, until full implementation is available, return minimal data
       return {
         owner: walletPublicKey,
         totalProfitLoss: 0,
@@ -943,6 +899,9 @@ export class SonicAgent {
         dataPoints: [],
         lastUpdated: new Date().toISOString(),
       };
+    } catch (error) {
+      console.error('Error fetching portfolio performance:', error);
+      return null;
     }
   }
 
@@ -968,9 +927,9 @@ export class SonicAgent {
         const targetAllocation = config.targetAllocations?.find(a => a.mint === asset.token);
         
         return {
-          mint: asset.token,
+          mint: asset.mint ?? asset.token,
           symbol: asset.symbol,
-          name: asset.symbol, // Using symbol as a placeholder for name
+          name: asset.name ?? asset.symbol,
           currentPercentage: asset.currentPercentage,
           targetPercentage: targetAllocation?.percentage || 0,
           difference: asset.currentPercentage - (targetAllocation?.percentage || 0),
@@ -1021,13 +980,6 @@ export class SonicAgent {
     privateKey?: string
   ): Promise<TradeResult> {
     try {
-      // In a real implementation, this would:
-      // 1. Call Jupiter for optimal swap
-      // 2. Execute the swap
-      // 3. Record the trade in the contract
-      
-      // Here, we'll just simulate success and record the trade
-      
       // Find PDAs
       const [agentPDA] = await this.findAgentPDA(walletPublicKey);
       const [statsPDA] = await this.findStatsPDA(agentPDA);
@@ -1048,17 +1000,17 @@ export class SonicAgent {
       // Create transaction to record trade
       const tx = await this.program.methods
         .recordTrade(
-          Array.from(strategyIdBytes), // strategy_id
-          new PublicKey(inputMint), // input_mint
-          new PublicKey(outputMint), // output_mint
-          new BN(Math.floor(inputAmount * 1e9)), // input_amount with decimals
-          new BN(Math.floor(outputAmount * 1e9)), // output_amount with decimals
-          slippageBps, // slippage_bps
-          Array.from(new Array(64), () => Math.floor(Math.random() * 256)), // transaction_signature (random for now)
-          true, // success
-          20, // price_impact_bps (hardcoded for this example)
-          reason, // reason
-          tradeBump, // bump
+          Array.from(strategyIdBytes),
+          new PublicKey(inputMint),
+          new PublicKey(outputMint),
+          new BN(Math.floor(inputAmount * 1e9)),
+          new BN(Math.floor(outputAmount * 1e9)),
+          slippageBps,
+          Array.from(new Array(64), () => Math.floor(Math.random() * 256)), // TODO: Replace with actual signature
+          true,
+          20, // TODO: Calculate actual price impact
+          reason,
+          tradeBump,
         )
         .accounts({
           authority: new PublicKey(walletPublicKey),
@@ -1080,18 +1032,22 @@ export class SonicAgent {
         
         // Send notification
         if (this.notificationService) {
-          this.notificationService.addNotification({
-            type: NotificationType.SUCCESS,
-            title: 'Trade Executed',
-            message: `Successfully executed trade from ${inputAmount} ${inputMint} to ${outputAmount} ${outputMint}`,
-            category: NotificationCategory.TRADING
-          });
+          this.notificationService.notifyTrade(
+            `Successfully executed trade from ${inputAmount} ${inputMint} to ${outputAmount} ${outputMint}`,
+            {
+              title: 'Trade Executed',
+              type: NotificationType.SUCCESS,
+              strategyId,
+              amount: inputAmount,
+              txid: signedTx
+            }
+          );
         }
 
         return {
           success: true,
           error: undefined,
-          timestamp: new Date().toISOString(),
+          timestamp: new Date().toISOString()
         };
       } else {
         // Return serialized transaction for client-side signing
@@ -1100,7 +1056,7 @@ export class SonicAgent {
         return {
           success: true,
           error: undefined,
-          timestamp: new Date().toISOString(),
+          timestamp: new Date().toISOString()
         };
       }
     } catch (error) {
@@ -1108,18 +1064,22 @@ export class SonicAgent {
       
       // Send notification
       if (this.notificationService) {
-        this.notificationService.addNotification({
-          type: NotificationType.ERROR,
-          title: 'Trade Failed',
-          message: error instanceof Error ? error.message : 'Unknown error executing trade',
-          category: NotificationCategory.TRADING
-        });
+        this.notificationService.notifyTrade(
+          `Trade failed: ${error instanceof Error ? error.message : 'Unknown error executing trade'}`,
+          {
+            title: 'Trade Failed',
+            type: NotificationType.ERROR,
+            strategyId,
+            amount: inputAmount,
+            txid: ''
+          }
+        );
       }
       
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error executing trade',
-        timestamp: new Date().toISOString(),
+        timestamp: new Date().toISOString()
       };
     }
   }

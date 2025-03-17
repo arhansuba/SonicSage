@@ -846,7 +846,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
               disabled={loading || isSubmitting}
             >
               Cancel
-            </button> 
+            </button>  
             <button
               type="submit"
               className={`py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors flex items-center ${

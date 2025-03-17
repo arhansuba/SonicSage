@@ -3,12 +3,12 @@
 import React, { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-import { 
-  NotificationType, 
-  NotificationCategory 
-} from '../services/NotificationService';
 import { useNotifications } from '../hooks/useNotifications';
-import { Button, Input, Select, Switch, Tooltip } from '../components/common/UIComponents';
+import { NotificationType } from './common/NotificationPanel';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@radix-ui/react-select';
+import { Button } from './ui/button';
+import { Input } from './ui/input';
+import { Switch } from '@headlessui/react';
 
 interface Token {
   symbol: string;
@@ -212,17 +212,18 @@ const PriceAlertComponent: React.FC<PriceAlertComponentProps> = ({
           <label className="block text-sm font-medium text-gray-700 mb-1">
             Select Token
           </label>
-          <Select
-            value={selectedToken?.address || ''}
-            onChange={(e) => handleTokenSelect(e.target.value)}
-            className={errors.token ? 'border-red-500' : ''}
-          >
-            <option value="">Select a token</option>
-            {tokens.map((token) => (
-              <option key={token.address} value={token.address}>
-                {token.symbol} - {token.name}
-              </option>
-            ))}
+          <Select value={selectedToken?.address || ''} onValueChange={(value: string) => handleTokenSelect(value)}>
+            <SelectTrigger className={`w-full ${errors.token ? 'border-red-500' : ''}`}>
+              <SelectValue placeholder="Select a token" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Select a token</SelectItem>
+              {tokens.map((token) => (
+                <SelectItem key={token.address} value={token.address}>
+                  {token.symbol} - {token.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
           {errors.token && (
             <p className="mt-1 text-sm text-red-600">{errors.token}</p>
@@ -342,7 +343,7 @@ const PriceAlertComponent: React.FC<PriceAlertComponentProps> = ({
           <div className="bg-red-50 p-3 rounded-md">
             <p className="text-sm text-red-600">{errors.form}</p>
           </div>
-        )}
+        )} 
         
         {/* Submit Button */}
         <Button

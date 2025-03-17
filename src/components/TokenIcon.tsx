@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 interface TokenIconProps {
-  symbol: string;
-  address?: string;
+  mint: string;
   size?: number;
   className?: string;
 }
@@ -11,8 +10,7 @@ interface TokenIconProps {
  * Component to display token icons
  */
 const TokenIcon: React.FC<TokenIconProps> = ({ 
-  symbol, 
-  address, 
+  mint, 
   size = 24, 
   className = '' 
 }) => {
@@ -22,13 +20,9 @@ const TokenIcon: React.FC<TokenIconProps> = ({
   useEffect(() => {
     const fetchTokenIcon = async () => {
       try {
-        if (address) {
-          // First try to load from token list
-          const iconUrl = `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${address}/logo.png`;
-          setImgSrc(iconUrl);
-        } else {
-          setHasError(true);
-        }
+        // Load from token list using mint address
+        const iconUrl = `https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/${mint}/logo.png`;
+        setImgSrc(iconUrl);
       } catch (error) {
         console.error("Error fetching token icon:", error);
         setHasError(true);
@@ -37,19 +31,19 @@ const TokenIcon: React.FC<TokenIconProps> = ({
 
     setHasError(false);
     fetchTokenIcon();
-  }, [address, symbol]);
+  }, [mint]);
 
   const handleImageError = () => {
-    // If logo.png fails, try to use a generic fallback based on symbol
-    const coinGeckoFallback = `https://api.coingecko.com/api/v3/coins/${symbol.toLowerCase()}`; 
+    // If logo.png fails, try to use a generic fallback based on mint
+    const coinGeckoFallback = `https://api.coingecko.com/api/v3/coins/${mint.toLowerCase()}`; 
     setImgSrc(coinGeckoFallback);
     setHasError(true);
   };
 
   // If we still have an error after trying fallbacks, render placeholder
   const renderPlaceholder = () => {
-    const initials = symbol.substring(0, 2).toUpperCase();
-    const backgroundColor = stringToColor(symbol);
+    const initials = mint.substring(0, 2).toUpperCase();
+    const backgroundColor = stringToColor(mint);
     
     return (
       <div 
@@ -85,7 +79,7 @@ const TokenIcon: React.FC<TokenIconProps> = ({
   return (
     <img
       src={imgSrc}
-      alt={`${symbol} icon`}
+      alt={`${mint} icon`}
       className={`rounded-full ${className}`}
       width={size}
       height={size}

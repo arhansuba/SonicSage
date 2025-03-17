@@ -1,1461 +1,1032 @@
-// src/components/PortfolioAnalyticsComponent.tsx
-
-import React, { useState, useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { Connection } from '@solana/web3.js';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { 
-  LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer 
-} from 'recharts';
-import { DeFiStrategy, UserDeFiPosition } from '../services/DeFiStrategyService';
-import { AIOptimizationService, MarketCondition } from '../services/AIOptimizationService';
-import { SonicSVMService } from '../services/SonicSVMService';
-import { useNotifications } from '../hooks/useNotifications';
-import { NotificationType } from '../services/NotificationService';
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardFooter, 
+  CardHeader, 
+  CardTitle 
+} from '@/components/ui/card';
+import { 
+  Tabs, 
+  TabsContent, 
+  TabsList, 
+  TabsTrigger 
+} from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Skeleton } from '@/components/ui/skeleton';
+import { 
+  ArrowUpRight, 
+  ArrowDownRight, 
+  Wallet, 
+  RefreshCw, 
+  ArrowRightLeft, 
+  TrendingUp, 
+  AlertCircle, 
+  PieChart,
+  BarChart3,
+  LineChart,
+  Diamond,
+  AlertTriangle
+} from 'lucide-react';
+import usePortfolio, { PortfolioAsset } from '@/hooks/usePortfolio';
+import useMarketData from '@/hooks/useMarketData';
+import { useTradingNotifications } from '@/hooks/useTradingNotifications';
+import { HermesClient } from '@pythnetwork/hermes-client';
+import { AIOptimizationService, RiskProfile, StrategyRecommendation } from '@/services/AIOptimizationService';
+import { DeFiStrategy, DeFiRiskLevel, ProtocolType } from '@/services/DeFiStrategyService';
+import { LineChart as RechartsLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
+import { Connection } from '@solana/web3.js';
 
-interface PortfolioAnalyticsComponentProps {
+interface AssetDistributionData {
+  name: string;
+  value: number;
+  color: string;
+}
+
+interface PerformanceData {
+  date: string;
+  value: number;
+}
+
+interface RecommendationCardProps {
+  recommendation: StrategyRecommendation;
+  onSelectStrategy: (strategy: DeFiStrategy) => void;
+}
+
+interface PortfolioAnalyticsProps {
   connection: Connection;
 }
 
-/**
- * Portfolio Analytics Component for visualizing and analyzing user's DeFi portfolio
- */
-const PortfolioAnalyticsComponent: React.FC<PortfolioAnalyticsComponentProps> = ({ connection }) => {
+// Helper function to format currency
+const formatCurrency = (value: number): string => {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
+};
+
+// Helper function to format percentage
+const formatPercentage = (value: number): string => {
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+};
+
+// Helper function to truncate wallet address
+const truncateAddress = (address: string): string => {
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+};
+
+// Asset coloring based on performance
+const getAssetColor = (performance: number): string => {
+  if (performance > 10) return 'rgb(34, 197, 94)'; // Green
+  if (performance > 0) return 'rgb(74, 222, 128)'; // Light green
+  if (performance > -10) return 'rgb(252, 165, 165)'; // Light red
+  return 'rgb(239, 68, 68)'; // Red
+};
+
+// Portfolio Asset Card Component
+const AssetCard = ({ asset }: { asset: PortfolioAsset }) => {
+  return (
+    <Card className="overflow-hidden">
+      <CardContent className="pt-6">
+        <div className="flex justify-between items-center mb-2">
+          <div className="flex items-center space-x-2">
+            {asset.logoURI ? (
+              <img src={asset.logoURI} alt={asset.symbol} className="w-6 h-6 rounded-full" />
+            ) : (
+              <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center">
+                {asset.symbol.charAt(0)}
+              </div>
+            )}
+            <div>
+              <h3 className="font-bold">{asset.symbol}</h3>
+              <p className="text-xs text-gray-500">{asset.name}</p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="font-semibold">{formatCurrency(asset.usdValue)}</p>
+            <div className="flex items-center text-xs">
+              {asset.priceChange24h && asset.priceChange24h > 0 ? (
+                <div className="flex items-center text-green-500">
+                  <ArrowUpRight size={14} />
+                  <span>{formatPercentage(asset.priceChange24h)}</span>
+                </div>
+              ) : (
+                <div className="flex items-center text-red-500">
+                  <ArrowDownRight size={14} />
+                  <span>{formatPercentage(asset.priceChange24h || 0)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2">
+          <div className="flex justify-between text-sm mb-1">
+            <span>Allocation</span>
+            <span>{asset.allocation.toFixed(2)}%</span>
+          </div>
+          <Progress value={asset.allocation} max={100} className="h-2" />
+          
+          {asset.needsRebalancing && asset.targetAllocation !== undefined && (
+            <div className="mt-2">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="flex items-center text-amber-500">
+                  <AlertCircle size={14} className="mr-1" />
+                  Target Allocation
+                </span>
+                <span>{asset.targetAllocation.toFixed(2)}%</span>
+              </div>
+              <Progress value={asset.targetAllocation} max={100} className="h-2 bg-gray-200" 
+                        color={asset.targetAllocation > asset.allocation ? "bg-green-500" : "bg-red-500"} />
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+// Recommendation Card Component
+const RecommendationCard: React.FC<RecommendationCardProps> = ({ recommendation, onSelectStrategy }) => {
+  // Helper function to get risk level badge color
+  const getRiskLevelColor = (riskLevel: DeFiRiskLevel): string => {
+    switch (riskLevel) {
+      case DeFiRiskLevel.CONSERVATIVE:
+        return "bg-blue-100 text-blue-800";
+      case DeFiRiskLevel.MODERATE:
+        return "bg-amber-100 text-amber-800";
+      case DeFiRiskLevel.AGGRESSIVE:
+        return "bg-red-100 text-red-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  // Helper function to get protocol type badge
+  const getProtocolTypeBadge = (type: ProtocolType): React.ReactNode => {
+    let icon;
+    let color;
+    
+    switch (type) {
+      case ProtocolType.LENDING:
+        icon = <ArrowRightLeft size={14} />;
+        color = "bg-purple-100 text-purple-800";
+        break;
+      case ProtocolType.YIELD_FARMING:
+        icon = <TrendingUp size={14} />;
+        color = "bg-green-100 text-green-800";
+        break;
+      case ProtocolType.LIQUIDITY_PROVIDING:
+        icon = <Diamond size={14} />;
+        color = "bg-blue-100 text-blue-800";
+        break;
+      case ProtocolType.STAKING:
+        icon = <BarChart3 size={14} />;
+        color = "bg-amber-100 text-amber-800";
+        break;
+      default:
+        icon = <AlertCircle size={14} />;
+        color = "bg-gray-100 text-gray-800";
+    }
+    
+    return (
+      <Badge variant="outline" className={`${color} flex items-center gap-1`}>
+        {icon}
+        {type}
+      </Badge>
+    );
+  };
+
+  return (
+    <Card className="overflow-hidden mb-4">
+      <CardHeader className="pb-2">
+        <div className="flex justify-between items-start">
+          <div>
+            <CardTitle>{recommendation.strategy.name}</CardTitle>
+            <CardDescription className="line-clamp-2">{recommendation.strategy.description}</CardDescription>
+          </div>
+          <Badge className="bg-green-100 text-green-800 flex items-center gap-1">
+            <TrendingUp size={14} />
+            {recommendation.strategy.estimatedApy.toFixed(2)}% APY
+          </Badge>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-2">
+          <Badge variant="outline" className={getRiskLevelColor(recommendation.strategy.riskLevel)}>
+            {recommendation.strategy.riskLevel}
+          </Badge>
+          {getProtocolTypeBadge(recommendation.strategy.protocolType)}
+        </div>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>Match Score</span>
+            <span className="font-semibold">{recommendation.matchScore}/100</span>
+          </div>
+          <Progress value={recommendation.matchScore} max={100} className="h-2" />
+          
+          <div className="flex justify-between text-sm">
+            <span>Recommended Allocation</span>
+            <span className="font-semibold">{recommendation.recommendedAllocation}%</span>
+          </div>
+          
+          <div className="mt-3 text-sm">
+            <h4 className="font-semibold mb-1">Why this recommendation:</h4>
+            <ul className="list-disc pl-5 space-y-1">
+              {recommendation.reasonsForRecommendation.slice(0, 2).map((reason, index) => (
+                <li key={index} className="text-gray-600">{reason}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </CardContent>
+      <CardFooter>
+        <Button 
+          className="w-full" 
+          onClick={() => onSelectStrategy(recommendation.strategy)}
+        >
+          View Strategy Details
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+};
+
+// Portfolio Distribution Chart
+const PortfolioDistributionChart = ({ assets }: { assets: PortfolioAsset[] }) => {
+  const chartData = useMemo(() => {
+    // Group small allocations as "Other"
+    const threshold = 5; // 5% threshold for grouping
+    const mainAssets: AssetDistributionData[] = [];
+    let otherValue = 0;
+    
+    // Color palette
+    const colors = [
+      '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+      '#8b5cf6', '#06b6d4', '#ec4899', '#f97316',
+      '#84cc16', '#14b8a6', '#6366f1', '#d946ef'
+    ];
+    
+    assets.forEach((asset, index) => {
+      if (asset.allocation >= threshold) {
+        mainAssets.push({
+          name: asset.symbol,
+          value: asset.allocation,
+          color: colors[index % colors.length]
+        });
+      } else {
+        otherValue += asset.allocation;
+      }
+    });
+    
+    // Add "Other" category if needed
+    if (otherValue > 0) {
+      mainAssets.push({
+        name: 'Other',
+        value: otherValue,
+        color: '#9ca3af' // Gray color for "Other"
+      });
+    }
+    
+    return mainAssets;
+  }, [assets]);
+
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <RechartsPieChart>
+          <Pie
+            data={chartData}
+            cx="50%"
+            cy="50%"
+            innerRadius={60}
+            outerRadius={80}
+            paddingAngle={2}
+            dataKey="value"
+            label={({ name, percent }) => `${name} (${(percent * 100).toFixed(1)}%)`}
+            labelLine={true}
+          >
+            {chartData.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={entry.color} />
+            ))}
+          </Pie>
+          <Tooltip 
+            formatter={(value: number) => [`${value.toFixed(2)}%`, 'Allocation']}
+            labelFormatter={(index) => chartData[index as number].name}
+          />
+        </RechartsPieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+// Portfolio Performance Chart
+const PortfolioPerformanceChart = ({ 
+  performanceData 
+}: { 
+  performanceData: PerformanceData[] 
+}) => {
+  return (
+    <div className="h-64">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart
+          data={performanceData}
+          margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+        >
+          <defs>
+            <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.8} />
+              <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+          <YAxis 
+            tick={{ fontSize: 12 }}
+            tickFormatter={(value) => `$${value.toLocaleString()}`}
+          />
+          <CartesianGrid strokeDasharray="3 3" />
+          <Tooltip formatter={(value) => [`$${Number(value).toLocaleString()}`, 'Portfolio Value']} />
+          <Area
+            type="monotone"
+            dataKey="value"
+            stroke="#3b82f6"
+            fillOpacity={1}
+            fill="url(#colorValue)"
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+// Main Portfolio Analytics Component
+const PortfolioAnalyticsComponent: React.FC<PortfolioAnalyticsProps> = ({ connection }) => {
   const { publicKey, connected } = useWallet();
-  const { notifyMarketEvent } = useNotifications();
   
-  // Services
-  const [aiService, setAiService] = useState<AIOptimizationService | null>(null);
-  const [sonicService, setSonicService] = useState<SonicSVMService | null>(null);
+  const { 
+    isLoading, 
+    error, 
+    assets, 
+    analytics, 
+    lastUpdated, 
+    isRebalancing,
+    refreshPortfolio,
+    generateRebalancingRecommendations,
+    executeRebalancing
+  } = usePortfolio();
   
-  // Component state
-  const [activeView, setActiveView] = useState<'overview' | 'performance' | 'allocation' | 'insights'>('overview');
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [userPositions, setUserPositions] = useState<UserDeFiPosition[]>([]);
-  const [strategies, setStrategies] = useState<DeFiStrategy[]>([]);
-  const [marketCondition, setMarketCondition] = useState<MarketCondition | null>(null);
-  const [timeframe, setTimeframe] = useState<'1d' | '1w' | '1m' | '3m' | 'all'>('1m');
+  const { trackTransaction, reportMarketEvent } = useTradingNotifications();
   
-  // Portfolio metrics
-  const [portfolioMetrics, setPortfolioMetrics] = useState<{
-    totalValue: number;
-    totalInvestment: number;
-    totalReturns: number;
-    returnPercentage: number;
-    averageApy: number;
-    riskScore: number;
-    tokenAllocation: {name: string; value: number}[];
-    protocolAllocation: {name: string; value: number}[];
-    riskAllocation: {name: string; value: number}[];
-  }>({
-    totalValue: 0,
-    totalInvestment: 0,
-    totalReturns: 0,
-    returnPercentage: 0,
-    averageApy: 0,
-    riskScore: 0,
-    tokenAllocation: [],
-    protocolAllocation: [],
-    riskAllocation: []
-  });
+  // State for strategy recommendations
+  const [recommendations, setRecommendations] = useState<StrategyRecommendation[]>([]);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState<boolean>(false);
+  const [selectedStrategy, setSelectedStrategy] = useState<DeFiStrategy | null>(null);
+  const [riskProfile, setRiskProfile] = useState<RiskProfile | null>(null);
   
-  // Performance data
-  const [performanceData, setPerformanceData] = useState<any[]>([]);
+  // Generate sample performance data
+  const [performanceData, setPerformanceData] = useState<PerformanceData[]>([]);
   
-  // AI insights
-  const [aiInsights, setAiInsights] = useState<any[]>([]);
-  
-  // Initialize services
+  // Create mock historical performance data if none is available
   useEffect(() => {
-    setAiService(AIOptimizationService.getInstance());
-    setSonicService(SonicSVMService.getInstance(connection));
-  }, [connection]);
-  
-  // Load user data when wallet connects
-  useEffect(() => {
-    const loadUserData = async () => {
-      if (!connected || !publicKey || !sonicService || !aiService) return;
+    if (analytics && analytics.totalValue > 0) {
+      const generateMockPerformanceData = () => {
+        const data: PerformanceData[] = [];
+        const now = new Date();
+        let currentValue = analytics.totalValue;
+        
+        // Generate data for the last 30 days
+        for (let i = 30; i >= 0; i--) {
+          const date = new Date(now);
+          date.setDate(date.getDate() - i);
+          
+          // Random daily fluctuation between -3% and +3%
+          const fluctuation = 1 + (Math.random() * 0.06 - 0.03);
+          
+          // Apply fluctuation to previous day's value
+          if (i !== 30) { // Not the first day
+            currentValue = currentValue * fluctuation;
+          }
+          
+          data.push({
+            date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            value: currentValue
+          });
+        }
+        
+        return data;
+      };
       
-      setIsLoading(true);
+      setPerformanceData(generateMockPerformanceData());
+    }
+  }, [analytics]);
+  
+  // Initialize AI service and fetch recommendations
+  useEffect(() => {
+    const fetchRecommendations = async () => {
+      if (!analytics || !assets.length) return;
+      
+      setIsLoadingRecommendations(true);
       
       try {
-        // Load user positions
-        const positions = await sonicService.getUserPositions(publicKey);
-        setUserPositions(positions);
+        // Get AI service instance
+        const aiService = AIOptimizationService.getInstance();
         
-        // Load strategies
-        // In a real app, we would fetch actual strategies
-        const mockStrategies = generateMockStrategies();
-        setStrategies(mockStrategies);
+        // Generate sample risk profile based on portfolio
+        const sampleRiskProfile: RiskProfile = {
+          riskTolerance: 'medium',
+          investmentHorizon: 'medium',
+          liquidityNeeds: 'medium',
+          volatilityTolerance: 5,
+          experienceLevel: 'intermediate'
+        };
         
-        // Get market condition
-        const market = await aiService.analyzeMarketConditions();
-        setMarketCondition(market);
+        setRiskProfile(sampleRiskProfile);
         
-        // Generate portfolio metrics
-        calculatePortfolioMetrics(positions, mockStrategies);
+        // Analyze market conditions
+        const marketCondition = await aiService.analyzeMarketConditions();
         
-        // Generate performance data
-        generatePerformanceData(positions, timeframe);
+        // Generate sample strategies
+        const strategies = await generateSampleStrategies();
         
-        // Generate AI insights
-        generateAiInsights(positions, mockStrategies, market);
-      } catch (error) {
-        console.error('Error loading user data:', error);
-        notifyMarketEvent(
-          'Error Loading Portfolio Data',
-          'Failed to load your portfolio data. Please try again.',
-          NotificationType.ERROR
+        // Get recommendations
+        const recs = await aiService.recommendStrategies(
+          strategies,
+          sampleRiskProfile,
+          marketCondition
         );
+        
+        setRecommendations(recs);
+      } catch (err) {
+        console.error('Error fetching strategy recommendations:', err);
       } finally {
-        setIsLoading(false);
+        setIsLoadingRecommendations(false);
       }
     };
     
-    loadUserData();
-  }, [connected, publicKey, sonicService, aiService]);
+    fetchRecommendations();
+  }, [analytics, assets]);
   
-  // Recalculate performance data when timeframe changes
-  useEffect(() => {
-    if (userPositions.length > 0) {
-      generatePerformanceData(userPositions, timeframe);
-    }
-  }, [timeframe, userPositions]);
-  
-  // Calculate portfolio metrics
-  const calculatePortfolioMetrics = (positions: UserDeFiPosition[], allStrategies: DeFiStrategy[]) => {
-    if (positions.length === 0) return;
-    
-    const totalValue = positions.reduce((sum, pos) => sum + pos.investmentValue, 0);
-    const totalInvestment = positions.reduce((sum, pos) => sum + pos.initialInvestment, 0);
-    const totalReturns = totalValue - totalInvestment;
-    const returnPercentage = (totalReturns / totalInvestment) * 100;
-    const averageApy = positions.reduce((sum, pos) => sum + pos.apy, 0) / positions.length;
-    
-    // Calculate risk score (weighted average based on position values)
-    let weightedRiskScore = 0;
-    positions.forEach(pos => {
-      const strategy = allStrategies.find(s => s.id === pos.strategyId);
-      if (strategy) {
-        const riskValue = 
-          strategy.riskLevel === 'conservative' ? 2 :
-          strategy.riskLevel === 'moderate' ? 5 :
-          strategy.riskLevel === 'aggressive' ? 8 : 10;
-        
-        weightedRiskScore += (pos.investmentValue / totalValue) * riskValue;
-      }
-    });
-    
-    // Calculate token allocation
-    const tokenMap = new Map<string, number>();
-    positions.forEach(pos => {
-      pos.positions.forEach(position => {
-        if (position.tokenA) {
-          const currentValue = tokenMap.get(position.tokenA.symbol) || 0;
-          tokenMap.set(position.tokenA.symbol, currentValue + position.tokenA.value);
-        }
-        if (position.tokenB) {
-          const currentValue = tokenMap.get(position.tokenB.symbol) || 0;
-          tokenMap.set(position.tokenB.symbol, currentValue + position.tokenB.value);
-        }
-      });
-    });
-    
-    const tokenAllocation = Array.from(tokenMap.entries()).map(([name, value]) => ({
-      name,
-      value: (value / totalValue) * 100
-    })).sort((a, b) => b.value - a.value);
-    
-    // Calculate protocol allocation
-    const protocolMap = new Map<string, number>();
-    positions.forEach(pos => {
-      pos.positions.forEach(position => {
-        const currentValue = protocolMap.get(position.protocol) || 0;
-        const positionValue = (position.tokenA?.value || 0) + (position.tokenB?.value || 0);
-        protocolMap.set(position.protocol, currentValue + positionValue);
-      });
-    });
-    
-    const protocolAllocation = Array.from(protocolMap.entries()).map(([name, value]) => ({
-      name,
-      value: (value / totalValue) * 100
-    })).sort((a, b) => b.value - a.value);
-    
-    // Calculate risk allocation
-    const riskMap = new Map<string, number>();
-    positions.forEach(pos => {
-      const strategy = allStrategies.find(s => s.id === pos.strategyId);
-      if (strategy) {
-        const riskLevel = strategy.riskLevel.charAt(0).toUpperCase() + strategy.riskLevel.slice(1);
-        const currentValue = riskMap.get(riskLevel) || 0;
-        riskMap.set(riskLevel, currentValue + pos.investmentValue);
-      }
-    });
-    
-    const riskAllocation = Array.from(riskMap.entries()).map(([name, value]) => ({
-      name,
-      value: (value / totalValue) * 100
-    })).sort((a, b) => b.value - a.value);
-    
-    setPortfolioMetrics({
-      totalValue,
-      totalInvestment,
-      totalReturns,
-      returnPercentage,
-      averageApy,
-      riskScore: weightedRiskScore,
-      tokenAllocation,
-      protocolAllocation,
-      riskAllocation
-    });
-  };
-  
-  // Generate performance data
-  const generatePerformanceData = (positions: UserDeFiPosition[], timeframe: '1d' | '1w' | '1m' | '3m' | 'all') => {
-    if (positions.length === 0) return;
-    
-    const now = new Date();
-    const data: any[] = [];
-    
-    // Determine number of data points and interval based on timeframe
-    let days = 0;
-    let interval = 1;
-    
-    switch (timeframe) {
-      case '1d':
-        days = 1;
-        interval = 1/24; // hourly
-        break;
-      case '1w':
-        days = 7;
-        interval = 1; // daily
-        break;
-      case '1m':
-        days = 30;
-        interval = 1; // daily
-        break;
-      case '3m':
-        days = 90;
-        interval = 3; // every 3 days
-        break;
-      case 'all':
-        // Find earliest subscription date
-        const earliestDate = Math.min(
-          ...positions.map(pos => pos.subscriptionTime)
-        );
-        days = Math.max(90, Math.ceil((now.getTime() - earliestDate) / (24 * 60 * 60 * 1000)));
-        interval = Math.max(1, Math.floor(days / 60)); // at most 60 data points
-        break;
-    }
-    
-    // Generate data points
-    for (let i = 0; i <= days; i += interval) {
-      const date = new Date(now.getTime() - (days - i) * 24 * 60 * 60 * 1000);
-      const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      
-      // Calculate portfolio value at this date
-      let portfolioValue = 0;
-      
-      positions.forEach(pos => {
-        // Skip positions subscribed after this date
-        if (pos.subscriptionTime > date.getTime()) return;
-        
-        // Calculate position value at this date
-        const daysSinceSubscription = (date.getTime() - pos.subscriptionTime) / (24 * 60 * 60 * 1000);
-        const dailyReturn = pos.apy / 365 / 100;
-        const value = pos.initialInvestment * Math.pow(1 + dailyReturn, daysSinceSubscription);
-        
-        portfolioValue += value;
-      });
-      
-      data.push({
-        date: dateStr,
-        value: portfolioValue.toFixed(2)
-      });
-    }
-    
-    setPerformanceData(data);
-  };
-  
-  // Generate AI insights
-  const generateAiInsights = (
-    positions: UserDeFiPosition[],
-    allStrategies: DeFiStrategy[],
-    market: MarketCondition
-  ) => {
-    if (positions.length === 0) return;
-    
-    const insights = [];
-    
-    // Portfolio diversification insight
-    const tokenCount = new Set(positions.flatMap(pos => 
-      pos.positions.flatMap(p => [p.tokenA?.symbol, p.tokenB?.symbol].filter(Boolean))
-    )).size;
-    
-    const protocolCount = new Set(positions.flatMap(pos => 
-      pos.positions.map(p => p.protocol)
-    )).size;
-    
-    if (tokenCount < 4) {
-      insights.push({
-        type: 'diversification',
-        title: 'Low Token Diversification',
-        description: `Your portfolio only contains ${tokenCount} unique tokens. Consider adding more assets to reduce concentration risk.`,
-        score: 3,
-        recommendations: [
-          'Add stable tokens like USDC to reduce volatility',
-          'Consider liquid staking derivatives like mSOL or jitoSOL',
-          'Explore blue-chip tokens from the Solana ecosystem'
-        ]
-      });
-    } else {
-      insights.push({
-        type: 'diversification',
-        title: 'Good Token Diversification',
-        description: `Your portfolio contains ${tokenCount} unique tokens, providing good diversification across assets.`,
-        score: 8,
-        recommendations: [
-          'Continue maintaining a diverse token allocation',
-          'Consider rebalancing to your target allocations periodically'
-        ]
-      });
-    }
-    
-    // Risk assessment insight
-    const riskLevel = 
-      portfolioMetrics.riskScore < 3 ? 'very conservative' :
-      portfolioMetrics.riskScore < 5 ? 'conservative' :
-      portfolioMetrics.riskScore < 7 ? 'moderate' :
-      portfolioMetrics.riskScore < 9 ? 'aggressive' : 'very aggressive';
-    
-    insights.push({
-      type: 'risk',
-      title: 'Portfolio Risk Assessment',
-      description: `Your portfolio has a ${riskLevel} risk profile with a score of ${portfolioMetrics.riskScore.toFixed(1)}/10.`,
-      score: riskLevel === 'moderate' ? 7 : 5,
-      recommendations: 
-        riskLevel === 'very conservative' ? [
-          'Consider adding some moderate risk positions for higher returns',
-          'Explore yield farming strategies with blue-chip tokens',
-          'Increase allocation to liquid staking derivatives'
-        ] : riskLevel === 'very aggressive' ? [
-          'Add some conservative positions to reduce overall risk',
-          'Consider taking profits from highly volatile assets',
-          'Increase stablecoin allocation as a safety measure'
-        ] : [
-          'Your risk level appears balanced for steady returns',
-          'Consider regular rebalancing to maintain this profile',
-          'Adjust based on market conditions and risk tolerance'
-        ]
-    });
-    
-    // Market alignment insight
-    const marketTrend = market.marketTrend;
-    const volatilityIndex = market.volatilityIndex;
-    
-    let alignmentScore = 6; // Default moderate alignment
-    
-    if (marketTrend === 'bull' && portfolioMetrics.riskScore > 6) {
-      alignmentScore = 9;
-    } else if (marketTrend === 'bull' && portfolioMetrics.riskScore < 4) {
-      alignmentScore = 4;
-    } else if (marketTrend === 'bear' && portfolioMetrics.riskScore > 6) {
-      alignmentScore = 3;
-    } else if (marketTrend === 'bear' && portfolioMetrics.riskScore < 4) {
-      alignmentScore = 8;
-    }
-    
-    insights.push({
-      type: 'market_alignment',
-      title: 'Market Alignment Analysis',
-      description: `Your portfolio is ${alignmentScore > 7 ? 'well aligned' : alignmentScore > 5 ? 'moderately aligned' : 'not well aligned'} with current market conditions (${marketTrend}ish, volatility: ${volatilityIndex.toFixed(1)}/10).`,
-      score: alignmentScore,
-      recommendations: 
-        marketTrend === 'bull' && alignmentScore < 5 ? [
-          'Consider increasing exposure to growth assets to capitalize on bullish momentum',
-          'Explore liquidity providing strategies for higher returns',
-          'Reduce stablecoin allocation temporarily'
-        ] : marketTrend === 'bear' && alignmentScore < 5 ? [
-          'Consider reducing exposure to high-risk assets temporarily',
-          'Increase lending positions to generate stable income',
-          'Add stablecoin positions as a hedge against volatility'
-        ] : [
-          'Continue monitoring market conditions for potential adjustments',
-          'Regular rebalancing will help maintain alignment',
-          'Consider small tactical adjustments based on shorter-term trends'
-        ]
-    });
-    
-    // Performance insight
-    const portfolioReturn = portfolioMetrics.returnPercentage;
-    
-    insights.push({
-      type: 'performance',
-      title: 'Performance Analysis',
-      description: `Your portfolio has ${portfolioReturn >= 0 ? 'gained' : 'lost'} ${Math.abs(portfolioReturn).toFixed(2)}% with an average APY of ${portfolioMetrics.averageApy.toFixed(2)}%.`,
-      score: portfolioReturn > 10 ? 9 : portfolioReturn > 0 ? 6 : 3,
-      recommendations: 
-        portfolioReturn < 0 ? [
-          'Consider repositioning underperforming assets',
-          'Evaluate whether losses are due to temporary market conditions or structural issues',
-          'Look for higher-yielding opportunities with similar risk profiles'
-        ] : portfolioReturn < 5 ? [
-          'Your returns are positive but could be optimized',
-          'Consider strategies with higher APY while maintaining your risk profile',
-          'Evaluate fee structures of current positions'
-        ] : [
-          'Your portfolio is performing well',
-          'Continue monitoring to ensure sustainable returns',
-          'Consider taking some profits from best performers'
-        ]
-    });
-    
-    // Opportunity insight
-    insights.push({
-      type: 'opportunity',
-      title: 'AI-Identified Opportunities',
-      description: 'Based on your portfolio and current market conditions, our AI has identified potential opportunities to optimize returns.',
-      score: 7,
-      recommendations: [
-        market.marketTrend === 'bull' ? 
-          'Consider adding exposure to Solana liquid staking derivatives for strong passive yields' : 
-          'Lending markets currently offer attractive risk-adjusted returns',
-        volatilityIndex > 7 ? 
-          'Volatility is high - consider options strategies to capitalize on price movements' :
-          'Market volatility is moderate - liquidity provision could offer stable returns',
-        'The JUP/SOL liquidity pair is currently offering above-average returns with reasonable risk'
-      ]
-    });
-    
-    setAiInsights(insights);
-  };
-  
-  // Generate mock strategies
-  const generateMockStrategies = (): DeFiStrategy[] => {
+  // Generate sample strategies for demonstration
+  const generateSampleStrategies = async (): Promise<DeFiStrategy[]> => {
     return [
       {
-        id: 'strategy_001',
-        name: 'Safe Stablecoin Yield',
-        description: 'A conservative strategy focusing on generating stable yield from USDC and other stablecoins using lending protocols and staking.',
-        protocolType: 'lending',
-        riskLevel: 'conservative',
-        estimatedApy: 800, // 8.00%
-        tags: ['Stablecoin', 'Income', 'Safe', 'Lending'],
-        tvl: 2450000, // $2.45M
-        userCount: 156,
-        creatorAddress: 'Sonic3pXG67xdWbxCSx4pRDyQMvCtr6bwYRodnsFYGNPq',
-        lockupPeriod: 7,
-        minInvestment: 10, // $10
-        feePercentage: 20, // 0.2%
+        id: 'solend-main-usdc',
+        name: 'Solend USDC Lending',
+        description: 'Lend USDC on Solend to earn interest with low risk',
+        protocolType: ProtocolType.LENDING,
+        riskLevel: DeFiRiskLevel.CONSERVATIVE,
         tokens: [
-          { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', allocation: 60 },
-          { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', allocation: 30 },
-          { symbol: 'DAI', mint: 'EjmyN6qEC1Tf1JxiG1ae7UTJhUxSwk1TCWNWqxWV4J6o', allocation: 10 }
+          {
+            mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+            symbol: 'USDC',
+            allocation: 100
+          }
         ],
-        verified: true,
-        protocols: {
-          'Solend': 45,
-          'Tulip': 35,
-          'Marinade': 20
-        }
+        estimatedApy: 5.2,
+        tvl: 128000000,
+        userCount: 12500,
+        creatorAddress: 'So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo',
+        protocolConfig: {
+          platform: 'solend',
+          programId: 'So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo',
+          collateralFactor: 0.8,
+          maxUtilization: 0.9,
+          autoCompound: true,
+          autoRebalance: true,
+          liquidationBuffer: 0.05,
+          priceFeedIds: {
+            'USDC': '0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a'
+          }
+        },
+        feePercentage: 0.1,
+        minInvestment: 0
       },
       {
-        id: 'strategy_002',
-        name: 'Balanced SOL Maximizer',
-        description: 'A balanced strategy that maximizes yield from SOL and SOL liquid staking derivatives while maintaining moderate risk exposure.',
-        protocolType: 'staking',
-        riskLevel: 'moderate',
-        estimatedApy: 1500, // 15.00%
-        tags: ['Solana', 'Staking', 'Moderate', 'LSD'],
-        tvl: 4750000, // $4.75M
-        userCount: 312,
-        creatorAddress: 'Sonic7ZKBqAEHHFQgVcKKTYDjKDA5wTGMnHLgAn6MwFAh',
-        lockupPeriod: 14,
-        minInvestment: 25, // $25
-        feePercentage: 30, // 0.3%
+        id: 'marinade-sol-staking',
+        name: 'Marinade SOL Staking',
+        description: 'Stake SOL with Marinade to earn staking rewards and get liquid mSOL',
+        protocolType: ProtocolType.STAKING,
+        riskLevel: DeFiRiskLevel.CONSERVATIVE,
         tokens: [
-          { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112', allocation: 40 },
-          { symbol: 'mSOL', mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfXcJm7So', allocation: 35 },
-          { symbol: 'jitoSOL', mint: 'jito1ncmFPJNq2L6XNtyJPFwN7ULxo5rkWjz6w8gqgG', allocation: 25 }
+          {
+            mint: 'So11111111111111111111111111111111111111112', // SOL
+            symbol: 'SOL',
+            allocation: 100
+          }
         ],
-        verified: true,
-        protocols: {
-          'Marinade': 35,
-          'Jito': 25,
-          'Lido': 20,
-          'Solana Staking': 20
-        }
+        estimatedApy: 6.8,
+        tvl: 256000000,
+        userCount: 45000,
+        creatorAddress: 'MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD',
+        protocolConfig: {
+          platform: 'marinade',
+          programId: 'MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD',
+          autoCompound: true,
+          unstakeCooldown: 86400,
+          priceFeedIds: {
+            'SOL': '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+            'MSOL': '0xc2289a6a43d2ce91c6f55caec370f4acc38a2ed477f58813334c6d03749ff2a4'
+          }
+        },
+        feePercentage: 0.3,
+        minInvestment: 0
       },
       {
-        id: 'strategy_003',
-        name: 'DeFi Blue Chip Alpha',
-        description: 'An aggressive strategy targeting high APY through a combination of blue-chip DeFi protocols on Solana, optimized for maximum returns.',
-        protocolType: 'yield_farming',
-        riskLevel: 'aggressive',
-        estimatedApy: 3500, // 35.00%
-        tags: ['Yield', 'LP', 'Aggressive', 'Farming'],
-        tvl: 1250000, // $1.25M
-        userCount: 98,
-        creatorAddress: 'SonicDXYi8n1Mt9edjcnJLHNQpyJKbXWK5hcZBtJ6GHK9',
-        lockupPeriod: 30,
-        minInvestment: 100, // $100
-        feePercentage: 50, // 0.5%
+        id: 'raydium-sol-usdc-lp',
+        name: 'Raydium SOL-USDC LP',
+        description: 'Provide liquidity to the SOL-USDC pool on Raydium to earn trading fees and rewards',
+        protocolType: ProtocolType.LIQUIDITY_PROVIDING,
+        riskLevel: DeFiRiskLevel.MODERATE,
         tokens: [
-          { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112', allocation: 30 },
-          { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', allocation: 30 },
-          { symbol: 'JUP', mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', allocation: 20 },
-          { symbol: 'ORCA', mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', allocation: 20 }
+          {
+            mint: 'So11111111111111111111111111111111111111112', // SOL
+            symbol: 'SOL',
+            allocation: 50
+          },
+          {
+            mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+            symbol: 'USDC',
+            allocation: 50
+          }
         ],
-        verified: true,
-        protocols: {
-          'Raydium': 30,
-          'Orca': 30,
-          'Jupiter': 25,
-          'Drift': 15
-        }
+        estimatedApy: 15.5,
+        tvl: 87000000,
+        userCount: 8200,
+        creatorAddress: 'RVKd61ztZW9GUwhRbbLoYVRE5Xf1B2tVscKqwZqXgEr',
+        protocolConfig: {
+          platform: 'raydium',
+          programId: 'RVKd61ztZW9GUwhRbbLoYVRE5Xf1B2tVscKqwZqXgEr',
+          poolAddress: '58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2',
+          rebalanceThreshold: 0.05,
+          maxSlippage: 0.01,
+          autoCompound: true,
+          priceFeedIds: {
+            'SOL': '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+            'USDC': '0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a'
+          }
+        },
+        feePercentage: 0.25,
+        minInvestment: 0
+      },
+      {
+        id: 'jupiter-governance-staking',
+        name: 'Jupiter Governance Staking',
+        description: 'Stake JUP tokens to participate in governance and earn rewards',
+        protocolType: ProtocolType.STAKING,
+        riskLevel: DeFiRiskLevel.MODERATE,
+        tokens: [
+          {
+            mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', // JUP
+            symbol: 'JUP',
+            allocation: 100
+          }
+        ],
+        estimatedApy: 8.7,
+        tvl: 45000000,
+        userCount: 5600,
+        creatorAddress: 'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',
+        protocolConfig: {
+          platform: 'jupiter',
+          programId: 'JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB',
+          autoCompound: false,
+          unstakeCooldown: 259200, // 3 days
+          priceFeedIds: {
+            'JUP': '0x0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996'
+          }
+        },
+        feePercentage: 0.0,
+        minInvestment: 0
+      },
+      {
+        id: 'orca-whirlpool-sol-msol',
+        name: 'Orca SOL-mSOL Whirlpool',
+        description: 'Provide concentrated liquidity to the SOL-mSOL pool on Orca for boosted returns',
+        protocolType: ProtocolType.YIELD_FARMING,
+        riskLevel: DeFiRiskLevel.AGGRESSIVE,
+        tokens: [
+          {
+            mint: 'So11111111111111111111111111111111111111112', // SOL
+            symbol: 'SOL',
+            allocation: 50
+          },
+          {
+            mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', // mSOL
+            symbol: 'mSOL',
+            allocation: 50
+          }
+        ],
+        estimatedApy: 24.8,
+        tvl: 23000000,
+        userCount: 1850,
+        creatorAddress: 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',
+        protocolConfig: {
+          platform: 'orca',
+          programId: 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc',
+          poolAddress: '7qbRF6YsyGuLUVs6Y1q64bdVrfe4ZcUUz1JRdoVNUJnm',
+          harvestFrequency: 86400, // Daily
+          autoCompound: true,
+          maxSlippage: 0.01,
+          priceFeedIds: {
+            'SOL': '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+            'MSOL': '0xc2289a6a43d2ce91c6f55caec370f4acc38a2ed477f58813334c6d03749ff2a4'
+          }
+        },
+        feePercentage: 0.3,
+        minInvestment: 0
       }
     ];
   };
   
-  // Color schemes for charts
-  const COLORS = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316'];
-  const RISK_COLORS = {
-    'Conservative': '#10B981',
-    'Moderate': '#3B82F6',
-    'Aggressive': '#F59E0B',
-    'Experimental': '#EF4444'
+  // Handler for refreshing portfolio data
+  const handleRefresh = () => {
+    refreshPortfolio();
   };
   
-  // Formatter for currency
-  const formatCurrency = (value: number): string => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(value);
+  // Handler for rebalancing portfolio
+  const handleRebalance = async () => {
+    try {
+      await generateRebalancingRecommendations();
+    } catch (err) {
+      console.error('Error generating rebalance recommendations:', err);
+    }
   };
   
-  // Render the not connected state
+  // Handler for executing rebalancing
+  const handleExecuteRebalancing = async () => {
+    try {
+      await executeRebalancing();
+    } catch (err) {
+      console.error('Error executing rebalancing:', err);
+    }
+  };
+  
+  // Handler for strategy selection
+  const handleSelectStrategy = (strategy: DeFiStrategy) => {
+    setSelectedStrategy(strategy);
+  };
+  
+  // Test fetching a price from Pyth
+  const fetchPythPrice = async () => {
+    try {
+      const hermesClient = new HermesClient("https://hermes.pyth.network/", {});
+      
+      // Get SOL price from Pyth
+      const priceUpdates = await hermesClient.getLatestPriceUpdates([
+        "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d" // SOL/USD
+      ]);
+      
+      if (priceUpdates.parsed && priceUpdates.parsed.length > 0) {
+        const solPrice = priceUpdates.parsed[0].price;
+        console.log("SOL Price from Pyth:", solPrice);
+        
+        // Report market event for demonstration
+        reportMarketEvent({
+          type: 'priceMove',
+          token: 'So11111111111111111111111111111111111111112',
+          tokenSymbol: 'SOL',
+          message: `SOL price is now $${(Number(solPrice.price) * Math.pow(10, Number(solPrice.expo))).toFixed(2)}`
+        });
+      }
+    } catch (err) {
+      console.error('Error fetching Pyth price:', err);
+    }
+  };
+  
+  // Calculate total assets needing rebalancing
+  const assetsNeedingRebalance = assets.filter(asset => asset.needsRebalancing).length;
+  
   if (!connected) {
     return (
-      <div className="bg-white rounded-lg shadow p-6 text-center py-16">
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-gray-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">Connect your wallet</h2>
-        <p className="text-gray-600 mb-6">Please connect your wallet to view your portfolio analytics</p>
-        <button className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-          Connect Wallet
-        </button>
-      </div>
-    );
-  }
-  
-  // Render loading state
-  if (isLoading) {
-    return (
-      <div className="bg-white rounded-lg shadow p-6 text-center py-16">
-        <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">Loading Portfolio Data</h2>
-        <p className="text-gray-600">Fetching your positions and analyzing performance...</p>
-      </div>
-    );
-  }
-  
-  // Render empty state
-  if (userPositions.length === 0) {
-    return (
-      <div className="bg-white rounded-lg shadow p-6 text-center py-16">
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-gray-400 mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-        </svg>
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">No Portfolio Positions</h2>
-        <p className="text-gray-600 mb-6">You don't have any active DeFi positions yet</p>
-        <div className="flex flex-col sm:flex-row justify-center gap-4">
-          <button className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-            Explore Strategies
-          </button>
-          <button className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-            Create Strategy
-          </button>
-        </div>
-      </div>
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle>Portfolio Analytics</CardTitle>
+          <CardDescription>Connect your wallet to view your portfolio</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col items-center justify-center p-8">
+          <Wallet size={48} className="text-gray-400 mb-4" />
+          <p className="text-center text-gray-500">Connect your wallet to see your portfolio analytics and get personalized DeFi recommendations</p>
+        </CardContent>
+      </Card>
     );
   }
   
   return (
     <div className="space-y-6">
-      {/* Portfolio header */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-6 py-5 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-900">Portfolio Analytics</h2>
-          <p className="text-gray-600 mt-1">AI-powered insights and visualization of your DeFi portfolio</p>
-        </div>
-        
-        <div className="px-6 py-4 bg-gray-50">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Header Card */}
+      {/* Header Card */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center">
             <div>
-              <p className="text-sm text-gray-500">Total Value</p>
-              <p className="text-lg font-semibold text-gray-900">{formatCurrency(portfolioMetrics.totalValue)}</p>
+              <CardTitle>Portfolio Analytics</CardTitle>
+              <CardDescription>
+                {publicKey && `Wallet: ${truncateAddress(publicKey.toString())}`}
+              </CardDescription>
             </div>
-            <div>
-              <p className="text-sm text-gray-500">Total Return</p>
-              <p className={`text-lg font-semibold ${portfolioMetrics.totalReturns >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(portfolioMetrics.totalReturns)} ({portfolioMetrics.returnPercentage.toFixed(2)}%)
-              </p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">Average APY</p>
-              <p className="text-lg font-semibold text-green-600">{portfolioMetrics.averageApy.toFixed(2)}%</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">Positions</p>
-              <p className="text-lg font-semibold text-gray-900">{userPositions.length}</p>
-            </div>
-            <div>
-              <p className="text-sm text-gray-500">Risk Score</p>
-              <p className="text-lg font-semibold text-gray-900">{portfolioMetrics.riskScore.toFixed(1)}/10</p>
+            <div className="mt-2 sm:mt-0 flex items-center">
+              <Button 
+                variant="outline" 
+                className="mr-2 flex items-center" 
+                onClick={handleRefresh}
+                disabled={isLoading}
+              >
+                <RefreshCw size={16} className={`mr-1 ${isLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              <Button 
+                variant="default" 
+                className="flex items-center" 
+                onClick={handleRebalance}
+                disabled={isLoading || isRebalancing}
+              >
+                <ArrowRightLeft size={16} className="mr-1" />
+                Rebalance
+              </Button>
             </div>
           </div>
-        </div>
-      </div>
-      
-      {/* View tabs */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="border-b border-gray-200">
-          <nav className="-mb-px flex">
-            <button
-              className={`${
-                activeView === 'overview'
-                  ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex-1 text-center`}
-              onClick={() => setActiveView('overview')}
-            >
-              Overview
-            </button>
-            <button
-              className={`${
-                activeView === 'performance'
-                  ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex-1 text-center`}
-              onClick={() => setActiveView('performance')}
-            >
-              Performance
-            </button>
-            <button
-              className={`${
-                activeView === 'allocation'
-                  ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex-1 text-center`}
-              onClick={() => setActiveView('allocation')}
-            >
-              Allocation
-            </button>
-            <button
-              className={`${
-                activeView === 'insights'
-                  ? 'border-indigo-500 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              } whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex-1 text-center`}
-              onClick={() => setActiveView('insights')}
-            >
-              AI Insights
-            </button>
-          </nav>
-        </div>
-        
-        <div className="p-6">
-          {/* Overview View */}
-          {activeView === 'overview' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Performance Chart */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-lg font-medium">Performance</h3>
-                    <div className="flex space-x-2">
-                      {(['1w', '1m', '3m', 'all'] as const).map((tf) => (
-                        <button
-                          key={tf}
-                          className={`px-2 py-1 text-xs rounded ${
-                            timeframe === tf ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-700'
-                          }`}
-                          onClick={() => setTimeframe(tf)}
-                        >
-                          {tf === '1w' ? '1W' : tf === '1m' ? '1M' : tf === '3m' ? '3M' : 'All'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart
-                        data={performanceData}
-                        margin={{ top: 5, right: 5, left: 5, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="date" />
-                        <YAxis />
-                        <Tooltip formatter={(value) => [formatCurrency(parseFloat(value as string)), 'Value']} />
-                        <Area type="monotone" dataKey="value" stroke="#4F46E5" fill="#C7D2FE" fillOpacity={0.5} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-4">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : error ? (
+            <div className="text-center p-4 text-red-500">
+              <AlertTriangle size={24} className="mx-auto mb-2" />
+              <p>Error loading portfolio data: {error.message}</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-white rounded-lg p-4 shadow">
+                  <p className="text-sm text-gray-500 mb-1">Total Portfolio Value</p>
+                  <p className="text-2xl font-bold">{formatCurrency(analytics.totalValue)}</p>
+                  <div className="flex items-center mt-1">
+                    {analytics.changePercentage24h >= 0 ? (
+                      <div className="flex items-center text-green-500 text-sm">
+                        <ArrowUpRight size={14} className="mr-1" />
+                        <span>{formatPercentage(analytics.changePercentage24h)}</span>
+                        <span className="text-gray-500 ml-1">24h</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-red-500 text-sm">
+                        <ArrowDownRight size={14} className="mr-1" />
+                        <span>{formatPercentage(analytics.changePercentage24h)}</span>
+                        <span className="text-gray-500 ml-1">24h</span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 
-                {/* Allocation Chart */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Asset Allocation</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={portfolioMetrics.tokenAllocation}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                        >
-                          {portfolioMetrics.tokenAllocation.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => [`${value.toFixed(2)}%`, 'Allocation']} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
+                <div className="bg-white rounded-lg p-4 shadow">
+                  <p className="text-sm text-gray-500 mb-1">Asset Diversity</p>
+                  <p className="text-2xl font-bold">{assets.length}</p>
+                  <p className="text-sm text-gray-500 mt-1">Tracked tokens</p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-4 shadow">
+                  <p className="text-sm text-gray-500 mb-1">SOL Price</p>
+                  <p className="text-2xl font-bold">{formatCurrency(analytics.solPrice)}</p>
+                  <div className="flex items-center mt-1">
+                    {assets.find(a => a.symbol === 'SOL')?.priceChange24h! >= 0 ? (
+                      <div className="flex items-center text-green-500 text-sm">
+                        <ArrowUpRight size={14} className="mr-1" />
+                        <span>{formatPercentage(assets.find(a => a.symbol === 'SOL')?.priceChange24h || 0)}</span>
+                        <span className="text-gray-500 ml-1">24h</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center text-red-500 text-sm">
+                        <ArrowDownRight size={14} className="mr-1" />
+                        <span>{formatPercentage(assets.find(a => a.symbol === 'SOL')?.priceChange24h || 0)}</span>
+                        <span className="text-gray-500 ml-1">24h</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
               
-              {/* Positions */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-medium mb-4">Your Positions</h3>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strategy</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Return</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">APY</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Risk</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subscribed</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {userPositions.map((position) => {
-                        const strategy = strategies.find(s => s.id === position.strategyId);
-                        return (
-                          <tr key={position.strategyId} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="font-medium text-gray-900">{strategy?.name || 'Unknown Strategy'}</div>
-                              <div className="text-sm text-gray-500">{
-                                strategy?.protocolType === 'lending' ? 'Lending' :
-                                strategy?.protocolType === 'liquidity_providing' ? 'Liquidity Providing' :
-                                strategy?.protocolType === 'yield_farming' ? 'Yield Farming' :
-                                strategy?.protocolType === 'staking' ? 'Staking' : 'Options'
-                              }</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">{formatCurrency(position.investmentValue)}</div>
-                              <div className="text-xs text-gray-500">
-                                {((position.investmentValue / portfolioMetrics.totalValue) * 100).toFixed(1)}% of portfolio
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className={`text-sm ${position.returns >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {formatCurrency(position.returns)}
-                              </div>
-                              <div className={`text-xs ${position.returns >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                {((position.returns / position.initialInvestment) * 100).toFixed(2)}%
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-green-600">{position.apy.toFixed(2)}%</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                strategy?.riskLevel === 'conservative' ? 'bg-green-100 text-green-800' :
-                                strategy?.riskLevel === 'moderate' ? 'bg-blue-100 text-blue-800' :
-                                strategy?.riskLevel === 'aggressive' ? 'bg-yellow-100 text-yellow-800' :
-                                'bg-red-100 text-red-800'
-                              }`}>
-                                {strategy?.riskLevel.charAt(0).toUpperCase() + (strategy?.riskLevel.slice(1) || '')}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {new Date(position.subscriptionTime).toLocaleDateString()}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              
-              {/* AI Insight Summary */}
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-4">
-                <div className="flex items-start">
-                  <div className="flex-shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-blue-800">AI Portfolio Insight</h3>
-                    <div className="mt-2 text-sm text-blue-700">
-                      <p>Based on our AI analysis, your portfolio is {
-                        portfolioMetrics.riskScore < 4 ? 'conservatively positioned' :
-                        portfolioMetrics.riskScore < 7 ? 'moderately positioned' : 'aggressively positioned'
-                      } with a {
-                        marketCondition?.marketTrend === 'bull' ? 'bullish' :
-                        marketCondition?.marketTrend === 'bear' ? 'bearish' : 'neutral'
-                      } market alignment. {
-                        portfolioMetrics.returnPercentage >= 10 ? 'Performance is strong with above-average returns.' :
-                        portfolioMetrics.returnPercentage >= 0 ? 'Performance is positive but could be optimized.' :
-                        'Performance needs attention with negative returns.'
-                      }</p>
+              {assetsNeedingRebalance > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <div className="flex items-center">
+                    <AlertCircle size={20} className="text-amber-500 mr-2" />
+                    <div>
+                      <p className="font-medium text-amber-800">Portfolio Rebalance Recommended</p>
+                      <p className="text-sm text-amber-700">
+                        {assetsNeedingRebalance} assets need rebalancing to optimize your portfolio
+                      </p>
                     </div>
-                    <div className="mt-3">
-                      <button
-                        className="text-sm font-medium text-blue-600 hover:text-blue-500"
-                        onClick={() => setActiveView('insights')}
-                      >
-                        View Detailed Insights →
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-          
-          {/* Performance View */}
-          {activeView === 'performance' && (
-            <div className="space-y-6">
-              {/* Performance Chart */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium">Performance History</h3>
-                  <div className="flex space-x-2">
-                    {(['1d', '1w', '1m', '3m', 'all'] as const).map((tf) => (
-                      <button
-                        key={tf}
-                        className={`px-2 py-1 text-xs rounded ${
-                          timeframe === tf ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-700'
-                        }`}
-                        onClick={() => setTimeframe(tf)}
-                      >
-                        {tf === '1d' ? '1D' : tf === '1w' ? '1W' : tf === '1m' ? '1M' : tf === '3m' ? '3M' : 'All'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart
-                      data={performanceData}
-                      margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
+                    <Button 
+                      className="ml-auto" 
+                      onClick={handleExecuteRebalancing}
+                      disabled={isRebalancing}
                     >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="date" />
-                      <YAxis />
-                      <Tooltip formatter={(value) => [formatCurrency(parseFloat(value as string)), 'Value']} />
-                      <Legend />
-                      <Area type="monotone" dataKey="value" stroke="#4F46E5" fill="#C7D2FE" fillOpacity={0.5} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-              
-              {/* Return Comparison */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Strategy Returns Comparison</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={userPositions.map(pos => {
-                          const strategy = strategies.find(s => s.id === pos.strategyId);
-                          return {
-                            name: strategy?.name || 'Unknown',
-                            return: ((pos.investmentValue - pos.initialInvestment) / pos.initialInvestment) * 100,
-                            apy: pos.apy
-                          };
-                        })}
-                        margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="name" />
-                        <YAxis />
-                        <Tooltip formatter={(value) => [`${parseFloat(value as string).toFixed(2)}%`, 'Return']} />
-                        <Legend />
-                        <Bar dataKey="return" fill="#4F46E5" name="Actual Return %" />
-                        <Bar dataKey="apy" fill="#10B981" name="APY %" />
-                      </BarChart>
-                    </ResponsiveContainer>
+                      {isRebalancing ? 'Rebalancing...' : 'Execute Rebalance'}
+                    </Button>
                   </div>
                 </div>
-                
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Performance Metrics</h3>
-                  
-                  <div className="mb-4">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="text-sm font-medium text-gray-700">Total Portfolio Return</span>
-                      <span className={`text-sm font-medium ${portfolioMetrics.returnPercentage >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {portfolioMetrics.returnPercentage.toFixed(2)}%
-                      </span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className={`h-2 rounded-full ${portfolioMetrics.returnPercentage >= 0 ? 'bg-green-600' : 'bg-red-600'}`}
-                        style={{ width: `${Math.min(100, Math.max(0, Math.abs(portfolioMetrics.returnPercentage)))}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-700">Average APY</span>
-                        <span className="text-sm font-medium text-green-600">{portfolioMetrics.averageApy.toFixed(2)}%</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div
-                          className="h-2 rounded-full bg-green-600"
-                          style={{ width: `${Math.min(100, portfolioMetrics.averageApy * 2)}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                    
-                    <div>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-700">Risk Score</span>
-                        <span className="text-sm font-medium text-gray-700">{portfolioMetrics.riskScore.toFixed(1)}/10</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div
-                          className={`h-2 rounded-full ${
-                            portfolioMetrics.riskScore < 3 ? 'bg-green-600' :
-                            portfolioMetrics.riskScore < 6 ? 'bg-blue-600' :
-                            portfolioMetrics.riskScore < 8 ? 'bg-yellow-600' : 'bg-red-600'
-                          }`}
-                          style={{ width: `${portfolioMetrics.riskScore * 10}%` }}
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="mt-6 space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Best Performing Position</span>
-                      <span className="text-sm font-medium text-green-600">
-                        {(() => {
-                          const bestPosition = [...userPositions].sort((a, b) => 
-                            (b.investmentValue / b.initialInvestment) - (a.investmentValue / a.initialInvestment)
-                          )[0];
-                          const bestStrategy = strategies.find(s => s.id === bestPosition?.strategyId);
-                          return bestStrategy?.name || 'N/A';
-                        })()}
-                      </span>
-                    </div>
-                    
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Worst Performing Position</span>
-                      <span className="text-sm font-medium text-red-600">
-                        {(() => {
-                          const worstPosition = [...userPositions].sort((a, b) => 
-                            (a.investmentValue / a.initialInvestment) - (b.investmentValue / b.initialInvestment)
-                          )[0];
-                          const worstStrategy = strategies.find(s => s.id === worstPosition?.strategyId);
-                          return worstStrategy?.name || 'N/A';
-                        })()}
-                      </span>
-                    </div>
-                    
-                    <div className="flex justify-between">
-                      <span className="text-sm text-gray-600">Highest APY Position</span>
-                      <span className="text-sm font-medium text-green-600">
-                        {(() => {
-                          const highestApyPosition = [...userPositions].sort((a, b) => b.apy - a.apy)[0];
-                          const highestApyStrategy = strategies.find(s => s.id === highestApyPosition?.strategyId);
-                          return highestApyStrategy?.name || 'N/A';
-                        })()}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Historical Performance */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-medium mb-4">Monthly Performance</h3>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Month</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Starting Value</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ending Value</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Return</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">APY</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {/* Generate 6 months of mock data */}
-                      {Array.from({ length: 6 }).map((_, i) => {
-                        const date = new Date();
-                        date.setMonth(date.getMonth() - i);
-                        const month = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-                        
-                        // Generate random values for demonstration
-                        const monthlyReturn = (Math.random() * 10) - 3; // Between -3% and 7%
-                        const startValue = portfolioMetrics.totalValue / (1 + monthlyReturn / 100);
-                        const endValue = portfolioMetrics.totalValue;
-                        const monthlyApy = (Math.random() * 5) + 5; // Between 5% and 10%
-                        
-                        return (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{month}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatCurrency(startValue)}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatCurrency(endValue)}</td>
-                            <td className={`px-6 py-4 whitespace-nowrap text-sm ${monthlyReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {monthlyReturn.toFixed(2)}%
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600">{monthlyApy.toFixed(2)}%</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              )}
             </div>
           )}
-          
-          {/* Allocation View */}
-          {activeView === 'allocation' && (
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Token Allocation */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Token Allocation</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={portfolioMetrics.tokenAllocation}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                        >
-                          {portfolioMetrics.tokenAllocation.map((entry, index) => (
-                            <Cell key={`token-cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => [`${value.toFixed(2)}%`, 'Allocation']} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-                
-                {/* Protocol Allocation */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Protocol Allocation</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={portfolioMetrics.protocolAllocation}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                        >
-                          {portfolioMetrics.protocolAllocation.map((entry, index) => (
-                            <Cell key={`protocol-cell-${index}`} fill={COLORS[(index + 3) % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => [`${value.toFixed(2)}%`, 'Allocation']} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-                
-                {/* Risk Allocation */}
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h3 className="text-lg font-medium mb-4">Risk Allocation</h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={portfolioMetrics.riskAllocation}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                          label={({ name, value }) => `${name}: ${value.toFixed(1)}%`}
-                        >
-                          {portfolioMetrics.riskAllocation.map((entry) => (
-                            <Cell 
-                              key={`risk-cell-${entry.name}`} 
-                              fill={RISK_COLORS[entry.name as keyof typeof RISK_COLORS] || COLORS[0]} 
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip formatter={(value) => [`${value.toFixed(2)}%`, 'Allocation']} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Token Breakdown */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-medium mb-4">Asset Breakdown</h3>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Token</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Allocation</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">30d Change</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {portfolioMetrics.tokenAllocation.map((token, index) => {
-                        // Generate random data for demonstration
-                        const value = (portfolioMetrics.totalValue * token.value) / 100;
-                        const change = (Math.random() * 40) - 15; // Between -15% and 25%
-                        
-                        return (
-                          <tr key={token.name} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="flex items-center">
-                                <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center mr-3">
-                                  <span className="text-xs font-medium">{token.name.slice(0, 2)}</span>
-                                </div>
-                                <div className="text-sm font-medium text-gray-900">{token.name}</div>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="flex items-center">
-                                <div className="w-full bg-gray-200 rounded-full h-2 mr-2">
-                                  <div
-                                    className="h-2 rounded-full"
-                                    style={{ 
-                                      width: `${token.value}%`,
-                                      backgroundColor: COLORS[index % COLORS.length]
-                                    }}
-                                  ></div>
-                                </div>
-                                <span className="text-sm text-gray-900">{token.value.toFixed(1)}%</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {formatCurrency(value)}
-                            </td>
-                            <td className={`px-6 py-4 whitespace-nowrap text-sm ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                              {change >= 0 ? '+' : ''}{change.toFixed(2)}%
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              
-              {/* Protocol Breakdown */}
-              <div className="bg-gray-50 rounded-lg p-4">
-                <h3 className="text-lg font-medium mb-4">Protocol Breakdown</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {portfolioMetrics.protocolAllocation.map((protocol, index) => {
-                    // Generate random data for demonstration
-                    const value = (portfolioMetrics.totalValue * protocol.value) / 100;
-                    const apy = 5 + Math.random() * 20; // Between 5% and 25%
-                    
-                    return (
-                      <div key={protocol.name} className="bg-white rounded-lg p-4 shadow-sm">
-                        <div className="flex justify-between items-center mb-2">
-                          <h4 className="font-medium text-gray-900">{protocol.name}</h4>
-                          <div 
-                            className="h-3 w-3 rounded-full" 
-                            style={{ backgroundColor: COLORS[(index + 3) % COLORS.length] }}
-                          ></div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <p className="text-xs text-gray-500">Allocation</p>
-                            <p className="text-sm font-medium">{protocol.value.toFixed(1)}%</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Value</p>
-                            <p className="text-sm font-medium">{formatCurrency(value)}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Avg APY</p>
-                            <p className="text-sm font-medium text-green-600">{apy.toFixed(2)}%</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500">Positions</p>
-                            <p className="text-sm font-medium">{1 + Math.floor(Math.random() * 3)}</p>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+        </CardContent>
+      </Card>
+      
+      {/* Tabs for Portfolio Analytics */}
+      <Tabs defaultValue="assets" className="w-full">
+        <TabsList className="grid grid-cols-4 mb-4">
+          <TabsTrigger value="assets" className="flex items-center">
+            <Wallet size={16} className="mr-2" />
+            Assets
+          </TabsTrigger>
+          <TabsTrigger value="performance" className="flex items-center">
+            <LineChart size={16} className="mr-2" />
+            Performance
+          </TabsTrigger>
+          <TabsTrigger value="distribution" className="flex items-center">
+            <PieChart size={16} className="mr-2" />
+            Distribution
+          </TabsTrigger>
+          <TabsTrigger value="recommendations" className="flex items-center">
+            <TrendingUp size={16} className="mr-2" />
+            Recommendations
+          </TabsTrigger>
+        </TabsList>
+        
+        {/* Assets Tab */}
+        <TabsContent value="assets" className="space-y-4">
+          {isLoading ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[...Array(6)].map((_, i) => (
+                <Skeleton key={i} className="h-32 w-full" />
+              ))}
             </div>
-          )}
-          
-          {/* AI Insights View */}
-          {activeView === 'insights' && (
-            <div className="space-y-6">
-              <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-4">
-                <div className="flex items-start">
-                  <div className="flex-shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                    </svg>
-                  </div>
-                  <div className="ml-4">
-                    <h3 className="text-lg font-semibold text-indigo-900">AI Portfolio Analysis</h3>
-                    <p className="mt-1 text-sm text-indigo-700">
-                      Our AI has analyzed your DeFi portfolio and identified opportunities and risks based on your positions and current market conditions.
+          ) : (
+            <>
+              {assets.length === 0 ? (
+                <Card className="p-8 text-center">
+                  <div className="flex flex-col items-center justify-center">
+                    <Wallet size={48} className="text-gray-300 mb-2" />
+                    <h3 className="text-lg font-medium">No assets found</h3>
+                    <p className="text-gray-500 mt-1">
+                      Your wallet doesn't have any token balances to display.
                     </p>
                   </div>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {assets.map((asset) => (
+                    <AssetCard key={asset.mint} asset={asset} />
+                  ))}
                 </div>
+              )}
+            </>
+          )}
+        </TabsContent>
+        
+        {/* Performance Tab */}
+        <TabsContent value="performance">
+          <Card>
+            <CardHeader>
+              <CardTitle>Portfolio Performance</CardTitle>
+              <CardDescription>Historical performance of your portfolio</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <>
+                  {performanceData.length > 0 ? (
+                    <PortfolioPerformanceChart performanceData={performanceData} />
+                  ) : (
+                    <div className="h-64 flex items-center justify-center">
+                      <p className="text-gray-500">Not enough data to display performance chart</p>
+                    </div>
+                  )}
+                </>
+              )}
+              <div className="mt-4 text-xs text-gray-500">
+                <p>
+                  Last updated: {lastUpdated ? lastUpdated.toLocaleString() : 'Never'}
+                </p>
+                <p>
+                  <Button 
+                    variant="link" 
+                    className="h-auto p-0 text-xs" 
+                    onClick={fetchPythPrice}
+                  >
+                    Test Pyth Price Feed
+                  </Button>
+                </p>
               </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {aiInsights.map((insight, index) => (
-                  <div key={insight.type} className={`bg-white rounded-lg shadow overflow-hidden border-t-4 ${
-                    insight.score >= 8 ? 'border-green-500' :
-                    insight.score >= 6 ? 'border-blue-500' :
-                    insight.score >= 4 ? 'border-yellow-500' : 'border-red-500'
-                  }`}>
-                    <div className="p-5">
-                      <div className="flex justify-between items-center mb-2">
-                        <h3 className="text-lg font-semibold text-gray-900">{insight.title}</h3>
-                        <div className="flex items-center">
-                          <span className="text-sm font-medium text-gray-600 mr-2">Score:</span>
-                          <div className="relative h-8 w-8 flex items-center justify-center">
-                            <svg className="absolute inset-0 h-8 w-8" viewBox="0 0 36 36">
-                              <circle
-                                cx="18" cy="18" r="16"
-                                fill="none"
-                                stroke="#e5e7eb"
-                                strokeWidth="3"
-                              />
-                              <circle
-                                cx="18" cy="18" r="16"
-                                fill="none"
-                                stroke={
-                                  insight.score >= 8 ? '#10B981' :
-                                  insight.score >= 6 ? '#3B82F6' :
-                                  insight.score >= 4 ? '#F59E0B' : '#EF4444'
-                                }
-                                strokeWidth="3"
-                                strokeDasharray={`${insight.score * 10.05} 100`}
-                                strokeDashoffset="25"
-                                strokeLinecap="round"
-                              />
-                            </svg>
-                            <span className="text-xs font-semibold">{insight.score}</span>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        
+        {/* Distribution Tab */}
+        <TabsContent value="distribution">
+          <Card>
+            <CardHeader>
+              <CardTitle>Asset Distribution</CardTitle>
+              <CardDescription>Breakdown of your portfolio by asset</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-64 w-full" />
+              ) : (
+                <>
+                  {assets.length > 0 ? (
+                    <PortfolioDistributionChart assets={assets} />
+                  ) : (
+                    <div className="h-64 flex items-center justify-center">
+                      <p className="text-gray-500">No assets to display in distribution chart</p>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+        
+        {/* Recommendations Tab */}
+        <TabsContent value="recommendations">
+          <Card>
+            <CardHeader>
+              <CardTitle>AI-Powered Strategy Recommendations</CardTitle>
+              <CardDescription>
+                Personalized DeFi strategies based on your risk profile and current market conditions
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoadingRecommendations ? (
+                <div className="space-y-4">
+                  {[...Array(3)].map((_, i) => (
+                    <Skeleton key={i} className="h-64 w-full" />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {recommendations.length === 0 ? (
+                    <div className="text-center py-8">
+                      <TrendingUp size={48} className="mx-auto text-gray-300 mb-4" />
+                      <h3 className="text-lg font-medium mb-2">No recommendations available</h3>
+                      <p className="text-gray-500 max-w-md mx-auto mb-4">
+                        We need more data about your portfolio to generate personalized recommendations.
+                      </p>
+                      <Button onClick={handleRefresh}>
+                        Refresh Portfolio
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {riskProfile && (
+                        <div className="bg-blue-50 p-4 rounded-lg mb-4">
+                          <h3 className="font-medium text-blue-800 mb-1">Your Risk Profile</h3>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-blue-700">
+                            <div>
+                              <span className="font-medium">Risk Tolerance:</span> {riskProfile.riskTolerance}
+                            </div>
+                            <div>
+                              <span className="font-medium">Investment Horizon:</span> {riskProfile.investmentHorizon}
+                            </div>
+                            <div>
+                              <span className="font-medium">Liquidity Needs:</span> {riskProfile.liquidityNeeds}
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
                       
-                      <p className="text-gray-600 mb-4">{insight.description}</p>
+                      <h3 className="text-lg font-medium mb-2">Top Recommendations</h3>
                       
-                      <div className="mb-4">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2">Recommendations</h4>
-                        <ul className="space-y-1 text-sm">
-                          {insight.recommendations.map((rec, i) => (
-                            <li key={i} className="flex items-start">
-                              <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-green-100 text-green-600 mr-2 mt-0.5">
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                </svg>
-                              </span>
-                              <span className="text-gray-700">{rec}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                      
-                      <button className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium py-2 px-4 rounded transition-colors">
-                        Apply Recommendations
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Market Conditions */}
-              <div className="bg-white rounded-lg shadow p-5">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Current Market Conditions</h3>
-                
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                  <div className="bg-gray-50 p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 text-sm">Market Trend</span>
-                      <span className={`font-medium text-sm ${
-                        marketCondition?.marketTrend === 'bull' ? 'text-green-600' :
-                        marketCondition?.marketTrend === 'bear' ? 'text-red-600' : 'text-yellow-600'
-                      }`}>
-                        {marketCondition?.marketTrend === 'bull' ? 'Bullish' :
-                         marketCondition?.marketTrend === 'bear' ? 'Bearish' : 'Neutral'}
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-gray-50 p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 text-sm">Volatility</span>
-                      <span className="font-medium text-sm">{marketCondition?.volatilityIndex.toFixed(1)}/10</span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-gray-50 p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 text-sm">Solana Price</span>
-                      <span className="font-medium text-sm">${marketCondition?.solanaPrice.toFixed(2)}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-gray-50 p-3 rounded-lg">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-600 text-sm">Total DeFi TVL</span>
-                      <span className="font-medium text-sm">${(marketCondition?.totalValueLocked || 0 / 1000000000).toFixed(2)}B</span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-100">
-                  <div className="flex">
-                    <div className="flex-shrink-0">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-yellow-600" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <div className="ml-3">
-                      <h4 className="text-sm font-medium text-yellow-800">Market Advisory</h4>
-                      <div className="mt-1 text-sm text-yellow-700">
-                        <p>
-                          {marketCondition?.marketTrend === 'bull'
-                            ? 'The market is currently showing bullish momentum. Consider capitalizing on growth opportunities while maintaining risk controls.'
-                            : marketCondition?.marketTrend === 'bear'
-                            ? 'The market is in a bearish trend. Focus on capital preservation and consider increasing allocation to stable assets.'
-                            : 'The market is in a neutral phase. This may be a good time for rebalancing and position optimization.'
-                          }
-                        </p>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {recommendations.slice(0, 4).map((recommendation) => (
+                          <RecommendationCard
+                            key={recommendation.strategy.id}
+                            recommendation={recommendation}
+                            onSelectStrategy={handleSelectStrategy}
+                          />
+                        ))}
                       </div>
                     </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* AI Position Recommendations */}
-              <div className="bg-white rounded-lg shadow p-5">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">AI Position Recommendations</h3>
-                
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Strategy</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Allocation</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recommended</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expected Impact</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {userPositions.map((position) => {
-                        const strategy = strategies.find(s => s.id === position.strategyId);
-                        if (!strategy) return null;
-                        
-                        // Generate random recommendation data for demo
-                        const currentAllocation = (position.investmentValue / portfolioMetrics.totalValue * 100).toFixed(1);
-                        const action = Math.random() > 0.6 ? 'increase' : Math.random() > 0.3 ? 'decrease' : 'maintain';
-                        const changeAmount = action === 'maintain' ? 0 : Math.floor(Math.random() * 10) + 1;
-                        const recommendedAllocation = action === 'increase' 
-                          ? (parseFloat(currentAllocation) + changeAmount).toFixed(1)
-                          : action === 'decrease'
-                          ? (Math.max(0, parseFloat(currentAllocation) - changeAmount)).toFixed(1)
-                          : currentAllocation;
-                        
-                        const impactText = action === 'increase'
-                          ? `+${(Math.random() * 2).toFixed(2)}% expected return`
-                          : action === 'decrease'
-                          ? `-${(Math.random() * 2).toFixed(2)}% portfolio risk`
-                          : 'Optimal allocation';
-                          
-                        return (
-                          <tr key={position.strategyId}>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="font-medium text-gray-900">{strategy.name}</div>
-                              <div className="text-xs text-gray-500">{strategy.protocolType}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {currentAllocation}%
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
-                              {recommendedAllocation}%
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                action === 'increase' ? 'bg-green-100 text-green-800' :
-                                action === 'decrease' ? 'bg-yellow-100 text-yellow-800' :
-                                'bg-blue-100 text-blue-800'
-                              }`}>
-                                {action === 'increase' ? '+ Increase' :
-                                 action === 'decrease' ? '- Decrease' : '= Maintain'}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {impactText}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                
-                <div className="mt-6 flex justify-end">
-                  <button className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                    Rebalance Portfolio
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+      
+      {/* Strategy Details Modal would go here in a full implementation */}
+      
+      {lastUpdated && (
+        <div className="text-xs text-gray-500 text-right mt-2">
+          Data last updated: {lastUpdated.toLocaleString()}
         </div>
-      </div>
+      )}
     </div>
   );
 };

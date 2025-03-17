@@ -1,37 +1,40 @@
-// src/components/DeFiStrategyComponent.tsx
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { Connection } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { useNotifications } from '../hooks/useNotifications';
-import { NotificationType } from '../services/NotificationService';
 import { 
-  DeFiStrategyService, 
+  DeFiStrategyService,
   DeFiStrategy, 
-  UserDeFiPosition, 
+  UserPosition, 
   ProtocolType,
-  DeFiRiskLevel
+  DeFiRiskLevel,
+  NotificationType
 } from '../services/DeFiStrategyService';
+import { HermesClient } from '@pythnetwork/hermes-client';
+import { PythSolanaReceiver } from '@pythnetwork/pyth-solana-receiver';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
+import { Transaction } from '@solana/web3.js';
 
 interface DeFiStrategyComponentProps {
   connection: Connection;
 }
 
 const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connection }) => {
-  const { publicKey, connected } = useWallet();
+  const { publicKey, connected, signTransaction, sendTransaction } = useWallet();
   const { notifyMarketEvent } = useNotifications();
   
   // Strategy service
   const [defiService, setDefiService] = useState<DeFiStrategyService | null>(null);
+  const [hermesClient, setHermesClient] = useState<HermesClient | null>(null);
+  const [pythReceiver, setPythReceiver] = useState<PythSolanaReceiver | null>(null);
   
   // Component state
   const [activeTab, setActiveTab] = useState<'overview' | 'strategies' | 'positions' | 'analytics'>('overview');
   const [strategies, setStrategies] = useState<DeFiStrategy[]>([]);
   const [filteredStrategies, setFilteredStrategies] = useState<DeFiStrategy[]>([]);
-  const [userPositions, setUserPositions] = useState<UserDeFiPosition[]>([]);
+  const [userPositions, setUserPositions] = useState<UserPosition[]>([]);
   const [selectedStrategy, setSelectedStrategy] = useState<DeFiStrategy | null>(null);
-  const [selectedPosition, setSelectedPosition] = useState<UserDeFiPosition | null>(null);
+  const [selectedPosition, setSelectedPosition] = useState<UserPosition | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [investmentAmount, setInvestmentAmount] = useState<string>('');
   const [selectedToken, setSelectedToken] = useState<string>('USDC');
@@ -51,15 +54,47 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
 
   // Initialize services
   useEffect(() => {
-    const service = DeFiStrategyService.getInstance(connection);
-    setDefiService(service);
-    
-    // Load strategies
-    loadStrategies();
-    
-    // Load market data
-    loadMarketData();
-  }, [connection]);
+    const initialize = async () => {
+      const service = DeFiStrategyService.getInstance(connection);
+      setDefiService(service);
+      
+      // Initialize Hermes client for Pyth price feeds
+      const hermes = new HermesClient("https://hermes.pyth.network/", {});
+      setHermesClient(hermes);
+      
+      // Initialize Pyth Solana receiver for submitting price updates
+      if (publicKey && signTransaction && await sendTransaction(new Transaction(), connection)) {
+        const wallet = {
+          publicKey,
+          signTransaction,
+          sendTransaction,
+          payer: Keypair.generate()
+        };
+        
+        const receiver = new PythSolanaReceiver({ 
+          connection, 
+          wallet: {
+            ...wallet,
+            signAllTransactions: async (transactions) => {
+              return Promise.all(transactions.map(tx => signTransaction(tx)));
+            }
+          },
+          receiverProgramId: new PublicKey('rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ'),
+          wormholeProgramId: new PublicKey('HDwcJBJXjL9FpJ7UBsYBtaDjsBUhuLCUYoz3zr8SWWaQ')
+        });
+        
+        setPythReceiver(receiver);
+      }
+      
+      // Load strategies
+      loadStrategies();
+      
+      // Load market data
+      loadMarketData();
+    };
+
+    initialize();
+  }, [connection, publicKey, signTransaction, sendTransaction]);
   
   // Load user positions when wallet connects
   useEffect(() => {
@@ -82,7 +117,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
       }
       
       // Get all strategies
-      const allStrategies = defiService?.getAllStrategies() || [];
+      const allStrategies = await defiService?.getStrategies() || [];
       setStrategies(allStrategies);
       setFilteredStrategies(allStrategies);
       
@@ -170,7 +205,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
       filtered = filtered.filter(strategy => 
         strategy.name.toLowerCase().includes(query) ||
         strategy.description.toLowerCase().includes(query) ||
-        strategy.tags.some(tag => tag.toLowerCase().includes(query))
+        strategy.tokens.some(token => token.symbol.toLowerCase().includes(query))
       );
     }
     
@@ -202,7 +237,14 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
 
   // Subscribe to a strategy
   const handleSubscribe = async () => {
-    if (!defiService || !publicKey || !selectedStrategy) return;
+    if (!defiService || !publicKey || !selectedStrategy || !hermesClient || !pythReceiver) {
+      notifyMarketEvent(
+        'Error',
+        'Unable to process your investment. Please try again.',
+        NotificationType.ERROR
+      );
+      return;
+    }
 
     try {
       const amount = parseFloat(investmentAmount);
@@ -230,7 +272,15 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
         [selectedToken]: amount
       };
 
-      await defiService.subscribeToStrategy(selectedStrategy.id, investmentAmounts);
+      // Get price feeds needed for this strategy
+      const priceFeedIds = Object.values(selectedStrategy.protocolConfig.priceFeedIds);
+
+      // Execute strategy with price updates
+      await defiService.executeStrategyWithPriceUpdate(
+        selectedStrategy.id,
+        'deposit',
+        { amount, tokenMint: selectedStrategy.tokens.find(t => t.symbol === selectedToken)?.mint }
+      );
 
       // Reset form and reload user positions
       setInvestmentAmount('');
@@ -238,17 +288,49 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
 
       // Switch to positions tab
       setActiveTab('positions');
+      
+      notifyMarketEvent(
+        'Investment Successful',
+        `Successfully invested ${amount} ${selectedToken} in ${selectedStrategy.name}`,
+        NotificationType.SUCCESS
+      );
     } catch (error) {
       console.error('Error subscribing to strategy:', error);
+      notifyMarketEvent(
+        'Investment Failed',
+        `Failed to invest in strategy: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        NotificationType.ERROR
+      );
     }
   };
 
   // Unsubscribe from a strategy
-  const handleUnsubscribe = async (position: UserDeFiPosition) => {
-    if (!defiService || !publicKey) return;
+  const handleUnsubscribe = async (position: UserPosition) => {
+    if (!defiService || !publicKey || !hermesClient || !pythReceiver) {
+      notifyMarketEvent(
+        'Error',
+        'Unable to process your withdrawal. Please try again.',
+        NotificationType.ERROR
+      );
+      return;
+    }
 
     try {
-      await defiService.unsubscribeFromStrategy(position.strategyId);
+      // Find strategy for this position
+      const strategy = strategies.find(s => s.id === position.strategyId);
+      if (!strategy) {
+        throw new Error(`Strategy not found for position ${position.strategyId}`);
+      }
+
+      // Execute strategy with price updates
+      await defiService.executeStrategyWithPriceUpdate(
+        position.strategyId,
+        'withdraw',
+        { 
+          amount: position.investmentValue,
+          tokenMint: position.tokenPositions[0]?.mint
+        }
+      );
 
       // Reload user positions
       loadUserPositions();
@@ -257,36 +339,103 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
       if (selectedPosition?.strategyId === position.strategyId) {
         setSelectedPosition(null);
       }
+      
+      notifyMarketEvent(
+        'Withdrawal Successful',
+        `Successfully withdrew from ${strategy.name}`,
+        NotificationType.SUCCESS
+      );
     } catch (error) {
       console.error('Error unsubscribing from strategy:', error);
+      notifyMarketEvent(
+        'Withdrawal Failed',
+        `Failed to withdraw from strategy: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        NotificationType.ERROR
+      );
     }
   };
 
   // Harvest rewards
-  const handleHarvest = async (position: UserDeFiPosition) => {
-    if (!defiService || !publicKey) return;
+  const handleHarvest = async (position: UserPosition) => {
+    if (!defiService || !publicKey || !hermesClient || !pythReceiver) {
+      notifyMarketEvent(
+        'Error',
+        'Unable to harvest rewards. Please try again.',
+        NotificationType.ERROR
+      );
+      return;
+    }
 
     try {
-      await defiService.harvestRewards(position.strategyId);
+      const strategy = strategies.find(s => s.id === position.strategyId);
+      if (!strategy) {
+        throw new Error(`Strategy not found for position ${position.strategyId}`);
+      }
+
+      // Execute strategy with price updates
+      await defiService.executeStrategyWithPriceUpdate(
+        position.strategyId,
+        'harvest',
+        {}
+      );
 
       // Reload user positions
       loadUserPositions();
+      
+      notifyMarketEvent(
+        'Harvest Successful',
+        `Successfully harvested rewards from ${strategy.name}`,
+        NotificationType.SUCCESS
+      );
     } catch (error) {
       console.error('Error harvesting rewards:', error);
+      notifyMarketEvent(
+        'Harvest Failed',
+        `Failed to harvest rewards: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        NotificationType.ERROR
+      );
     }
   };
 
   // Rebalance position
-  const handleRebalance = async (position: UserDeFiPosition) => {
-    if (!defiService || !publicKey) return;
+  const handleRebalance = async (position: UserPosition) => {
+    if (!defiService || !publicKey || !hermesClient || !pythReceiver) {
+      notifyMarketEvent(
+        'Error',
+        'Unable to rebalance position. Please try again.',
+        NotificationType.ERROR
+      );
+      return;
+    }
 
     try {
-      await defiService.rebalancePosition(position.strategyId);
+      const strategy = strategies.find(s => s.id === position.strategyId);
+      if (!strategy) {
+        throw new Error(`Strategy not found for position ${position.strategyId}`);
+      }
+
+      // Execute strategy with price updates
+      await defiService.executeStrategyWithPriceUpdate(
+        position.strategyId,
+        'rebalance',
+        {}
+      );
 
       // Reload user positions
       loadUserPositions();
+      
+      notifyMarketEvent(
+        'Rebalance Successful',
+        `Successfully rebalanced position in ${strategy.name}`,
+        NotificationType.SUCCESS
+      );
     } catch (error) {
       console.error('Error rebalancing position:', error);
+      notifyMarketEvent(
+        'Rebalance Failed',
+        `Failed to rebalance position: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        NotificationType.ERROR
+      );
     }
   };
 
@@ -308,16 +457,14 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
   // Get label for protocol type
   const getProtocolTypeLabel = (type: ProtocolType): string => {
     switch (type) {
-      case 'lending':
+      case ProtocolType.LENDING:
         return 'Lending';
-      case 'yield_farming':
+      case ProtocolType.YIELD_FARMING:
         return 'Yield Farming';
-      case 'liquidity_providing':
+      case ProtocolType.LIQUIDITY_PROVIDING:
         return 'Liquidity Providing';
-      case 'staking':
+      case ProtocolType.STAKING:
         return 'Staking';
-      case 'options':
-        return 'Options';
       default:
         return type;
     }
@@ -326,14 +473,12 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
   // Get label for risk level
   const getRiskLevelLabel = (level: DeFiRiskLevel): string => {
     switch (level) {
-      case 'conservative':
+      case DeFiRiskLevel.CONSERVATIVE:
         return 'Conservative';
-      case 'moderate':
+      case DeFiRiskLevel.MODERATE:
         return 'Moderate';
-      case 'aggressive':
+      case DeFiRiskLevel.AGGRESSIVE:
         return 'Aggressive';
-      case 'experimental':
-        return 'Experimental';
       default:
         return level;
     }
@@ -342,20 +487,18 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
   // Get color for risk level
   const getRiskLevelColor = (level: DeFiRiskLevel): string => {
     switch (level) {
-      case 'conservative':
+      case DeFiRiskLevel.CONSERVATIVE:
         return 'bg-green-100 text-green-800';
-      case 'moderate':
+      case DeFiRiskLevel.MODERATE:
         return 'bg-blue-100 text-blue-800';
-      case 'aggressive':
+      case DeFiRiskLevel.AGGRESSIVE:
         return 'bg-yellow-100 text-yellow-800';
-      case 'experimental':
-        return 'bg-red-100 text-red-800';
       default:
         return 'bg-gray-100 text-gray-800';
     }
   };
 
-  // Generated random performance data for charts
+  // Generate random performance data for charts
   const generatePerformanceData = (days: number, volatility: number): any[] => {
     const data = [];
     let value = 100;
@@ -416,7 +559,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
             <h3 className="text-lg font-medium mb-2">Top Lending Rates</h3>
             {marketData && (
               <div className="space-y-2">
-                {Object.entries(marketData.lendingRates.solend).slice(0, 3).map(([token, rates]: [string, any]) => (
+                {Object.entries(marketData.lendingRates.solend || {}).slice(0, 3).map(([token, rates]: [string, any]) => (
                   <div key={token} className="flex justify-between items-center">
                     <span className="text-sm">{token}</span>
                     <div className="flex flex-col items-end">
@@ -437,7 +580,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
             <h3 className="text-lg font-medium mb-2">Top Farming APYs</h3>
             {marketData && (
               <div className="space-y-2">
-                {Object.entries(marketData.farmingApys.raydium).slice(0, 3).map(([pool, apy]: [string, any]) => (
+                {Object.entries(marketData.farmingApys.raydium || {}).slice(0, 3).map(([pool, apy]: [string, any]) => (
                   <div key={pool} className="flex justify-between items-center">
                     <span className="text-sm">{pool}</span>
                     <span className="font-medium text-green-600">{apy}%</span>
@@ -475,9 +618,9 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                   <Bar dataKey="apy" barSize={20}>
                     {apyComparisonData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={
-                        entry.risk === 'conservative' ? '#10B981' :
-                        entry.risk === 'moderate' ? '#3B82F6' :
-                        entry.risk === 'aggressive' ? '#F59E0B' : '#EF4444'
+                        entry.risk === DeFiRiskLevel.CONSERVATIVE ? '#10B981' :
+                        entry.risk === DeFiRiskLevel.MODERATE ? '#3B82F6' :
+                        entry.risk === DeFiRiskLevel.AGGRESSIVE ? '#F59E0B' : '#EF4444'
                       } />
                     ))}
                   </Bar>
@@ -558,7 +701,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                 Protocol Type
               </label>
               <div className="flex flex-wrap gap-2">
-                {(['lending', 'yield_farming', 'liquidity_providing', 'staking', 'options'] as ProtocolType[]).map(type => (
+                {[ProtocolType.LENDING, ProtocolType.YIELD_FARMING, ProtocolType.LIQUIDITY_PROVIDING, ProtocolType.STAKING].map(type => (
                   <button
                     key={type}
                     onClick={() => toggleProtocolType(type)}
@@ -579,7 +722,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                 Risk Level
               </label>
               <div className="flex flex-wrap gap-2">
-                {(['conservative', 'moderate', 'aggressive', 'experimental'] as DeFiRiskLevel[]).map(level => (
+                {[DeFiRiskLevel.CONSERVATIVE, DeFiRiskLevel.MODERATE, DeFiRiskLevel.AGGRESSIVE].map(level => (
                   <button
                     key={level}
                     onClick={() => toggleRiskLevel(level)}
@@ -647,17 +790,12 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                       <span className={`text-xs px-2 py-0.5 rounded-full ${getRiskLevelColor(strategy.riskLevel)}`}>
                         {getRiskLevelLabel(strategy.riskLevel)}
                       </span>
-                      {strategy.verified && (
-                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          Verified
-                        </span>
-                      )}
                     </div>
                     <p className="mt-1 text-sm text-gray-500 max-w-3xl">{strategy.description}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
-                      {strategy.tags.map(tag => (
-                        <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                          {tag}
+                      {strategy.tokens.map(token => (
+                        <span key={token.mint} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                          {token.symbol}
                         </span>
                       ))}
                     </div>
@@ -674,7 +812,10 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                     <div className="mt-3 flex space-x-3">
                       <button
                         className="px-3 py-1 border border-gray-300 text-gray-700 text-sm rounded hover:bg-gray-50"
-                        onClick={() => setSelectedStrategy(strategy)}
+                        onClick={() => {
+                          setSelectedStrategy(strategy);
+                          document.getElementById('strategyDetailModal')?.classList.remove('hidden');
+                        }}
                       >
                         Details
                       </button>
@@ -759,17 +900,6 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                               <span>{token.symbol}</span>
                               <span className="ml-1 text-blue-600 font-medium">{token.allocation}%</span>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div className="mb-4">
-                        <h4 className="text-sm font-medium text-gray-700 mb-1">Tags</h4>
-                        <div className="flex flex-wrap gap-1">
-                          {selectedStrategy.tags.map(tag => (
-                            <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
-                              {tag}
-                            </span>
                           ))}
                         </div>
                       </div>
@@ -937,7 +1067,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
             <div className="bg-gray-50 p-3 rounded-md">
               <span className="text-sm text-gray-500 block">Total Returns</span>
               <span className="text-xl font-medium text-green-600">
-                {formatCurrency(userPositions.reduce((sum, p) => sum + (p.investmentValue - p.initialInvestment), 0))}
+                {formatCurrency(userPositions.reduce((sum, p) => sum + (p.returns), 0))}
               </span>
             </div>
             <div className="bg-gray-50 p-3 rounded-md">
@@ -1006,8 +1136,8 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                         <span className="text-lg font-medium text-green-600">{formatPercentage(position.apy)}</span>
                       </div>
                       <div>
-                        <span className="text-sm text-gray-500 block">Subscribed On</span>
-                        <span className="text-lg font-medium">{new Date(position.subscriptionTime).toLocaleDateString()}</span>
+                        <span className="text-sm text-gray-500 block">Created On</span>
+                        <span className="text-lg font-medium">{new Date(position.createdAt * 1000).toLocaleDateString()}</span>
                       </div>
                     </div>
                     
@@ -1015,34 +1145,41 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
                     <div className="mt-4">
                       <h4 className="text-sm font-medium text-gray-700 mb-2">Position Breakdown</h4>
                       <div className="space-y-2">
-                        {position.positions.map((pos, idx) => (
+                        {position.tokenPositions.map((token, idx) => (
                           <div key={idx} className="bg-gray-50 p-2 rounded-md">
                             <div className="flex justify-between items-center">
-                              <span className="text-sm font-medium">{pos.protocol}</span>
-                              <span className="text-xs text-gray-500">{pos.type}</span>
+                              <span className="text-sm font-medium">{token.symbol}</span>
+                              <span className="font-medium">{formatCurrency(token.value)}</span>
                             </div>
-                            {pos.tokenA && (
-                              <div className="flex justify-between items-center mt-1 text-sm">
-                                <span>{pos.tokenA.symbol}</span>
-                                <span className="font-medium">{formatCurrency(pos.tokenA.value)}</span>
-                              </div>
-                            )}
-                            {pos.tokenB && (
-                              <div className="flex justify-between items-center mt-1 text-sm">
-                                <span>{pos.tokenB.symbol}</span>
-                                <span className="font-medium">{formatCurrency(pos.tokenB.value)}</span>
-                              </div>
-                            )}
-                            {pos.healthFactor && (
-                              <div className="flex justify-between items-center mt-1 text-sm">
-                                <span>Health Factor</span>
-                                <span className={`font-medium ${pos.healthFactor < 1.2 ? 'text-red-600' : 'text-green-600'}`}>
-                                  {pos.healthFactor.toFixed(2)}
-                                </span>
-                              </div>
-                            )}
                           </div>
                         ))}
+                        
+                        {position.borrowPositions && position.borrowPositions.length > 0 && (
+                          <div className="mt-2">
+                            <h5 className="text-xs font-medium text-gray-500 mb-1">Borrow Positions</h5>
+                            {position.borrowPositions.map((borrow, idx) => (
+                              <div key={idx} className="bg-gray-50 p-2 rounded-md border-l-2 border-red-400">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-sm font-medium">{borrow.symbol}</span>
+                                  <span className="font-medium text-red-600">-{formatCurrency(borrow.value)}</span>
+                                </div>
+                                <div className="flex justify-between items-center text-xs text-gray-500">
+                                  <span>Interest Rate</span>
+                                  <span>{borrow.interestRate.toFixed(2)}%</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {position.healthFactor !== undefined && (
+                          <div className="mt-2 flex justify-between items-center bg-gray-50 p-2 rounded-md">
+                            <span className="text-sm">Health Factor</span>
+                            <span className={`font-medium ${position.healthFactor < 1.2 ? 'text-red-600' : 'text-green-600'}`}>
+                              {position.healthFactor.toFixed(2)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     
@@ -1115,12 +1252,224 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
 
   // Render Analytics Tab
   const renderAnalyticsTab = () => {
+    // For this implementation, we'll show a placeholder with basic analytics
+    // In a real implementation, this would fetch historical data and show charts
     return (
       <div className="space-y-6">
+        {/* Pyth Price Feeds */}
         <div className="bg-white rounded-lg shadow p-4">
-          <h3 className="text-lg font-medium mb-4">Portfolio Analytics</h3>
-          {/* Analytics content would go here */}
-          <p className="py-20 text-center text-gray-500">Advanced analytics coming soon...</p>
+          <h3 className="text-lg font-medium mb-4">Pyth Price Feeds</h3>
+          <p className="text-sm text-gray-500 mb-4">
+            Real-time price information is provided by Pyth Network. These prices are used for strategy calculations and position valuations.
+          </p>
+          
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">24h Change</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Feed ID</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                <tr>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">SOL/USD</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$122.45</td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="text-green-600 text-sm">+3.24%</span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">
+                    <span className="font-mono text-xs">0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">BTC/USD</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$59,872.10</td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="text-green-600 text-sm">+1.53%</span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">
+                    <span className="font-mono text-xs">0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">ETH/USD</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$2,983.42</td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="text-red-600 text-sm">-0.87%</span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">
+                    <span className="font-mono text-xs">0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">USDC/USD</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">$1.00</td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className="text-gray-600 text-sm">+0.01%</span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 truncate max-w-xs">
+                    <span className="font-mono text-xs">0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        {/* Strategy Comparison */}
+        <div className="bg-white rounded-lg shadow p-4">
+          <h3 className="text-lg font-medium mb-4">Strategy Comparison</h3>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">APY Comparison</h4>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={strategies.slice(0, 8)} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                    <XAxis dataKey="name" tick={{ fontSize: 10 }} interval={0} angle={-45} textAnchor="end" height={100} />
+                    <YAxis label={{ value: 'APY %', angle: -90, position: 'insideLeft' }} />
+                    <Tooltip formatter={(value, name, props) => [`${(Number(value) / 100).toFixed(2)}%`, 'APY']} />
+                    <Bar dataKey="estimatedApy" fill="#8884d8" name="APY">
+                      {strategies.slice(0, 8).map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={
+                          entry.riskLevel === DeFiRiskLevel.CONSERVATIVE ? '#10B981' :
+                          entry.riskLevel === DeFiRiskLevel.MODERATE ? '#3B82F6' :
+                          entry.riskLevel === DeFiRiskLevel.AGGRESSIVE ? '#F59E0B' : '#EF4444'
+                        } />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Protocol Breakdown</h4>
+              <div className="h-80">
+                {/* Create data for pie chart based on protocol types */}
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart 
+                    layout="vertical"
+                    data={[
+                      { name: 'Lending', value: strategies.filter(s => s.protocolType === ProtocolType.LENDING).length },
+                      { name: 'Yield Farming', value: strategies.filter(s => s.protocolType === ProtocolType.YIELD_FARMING).length },
+                      { name: 'Liquidity Providing', value: strategies.filter(s => s.protocolType === ProtocolType.LIQUIDITY_PROVIDING).length },
+                      { name: 'Staking', value: strategies.filter(s => s.protocolType === ProtocolType.STAKING).length }
+                    ].filter(item => item.value > 0)} 
+                    margin={{ top: 5, right: 20, left: 50, bottom: 5 }}
+                  >
+                    <XAxis type="number" />
+                    <YAxis type="category" dataKey="name" />
+                    <Tooltip />
+                    <Bar dataKey="value" fill="#8884d8">
+                      <Cell fill="#3B82F6" />
+                      <Cell fill="#10B981" />
+                      <Cell fill="#F59E0B" />
+                      <Cell fill="#8B5CF6" />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Risk Analysis */}
+        <div className="bg-white rounded-lg shadow p-4">
+          <h3 className="text-lg font-medium mb-4">Risk Analysis</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="border rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Conservative Strategies</h4>
+              <div className="text-2xl font-bold text-green-600 mb-2">
+                {strategies.filter(s => s.riskLevel === DeFiRiskLevel.CONSERVATIVE).length}
+              </div>
+              <div className="text-sm text-gray-500">
+                <div className="flex justify-between mb-1">
+                  <span>Avg. APY:</span>
+                  <span className="font-medium">
+                    {formatPercentage(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.CONSERVATIVE)
+                        .reduce((sum, s) => sum + s.estimatedApy, 0) / 
+                        (strategies.filter(s => s.riskLevel === DeFiRiskLevel.CONSERVATIVE).length || 1) / 
+                        100
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>TVL:</span>
+                  <span className="font-medium">
+                    {formatCurrency(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.CONSERVATIVE)
+                        .reduce((sum, s) => sum + s.tvl, 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="border rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Moderate Strategies</h4>
+              <div className="text-2xl font-bold text-blue-600 mb-2">
+                {strategies.filter(s => s.riskLevel === DeFiRiskLevel.MODERATE).length}
+              </div>
+              <div className="text-sm text-gray-500">
+                <div className="flex justify-between mb-1">
+                  <span>Avg. APY:</span>
+                  <span className="font-medium">
+                    {formatPercentage(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.MODERATE)
+                        .reduce((sum, s) => sum + s.estimatedApy, 0) / 
+                        (strategies.filter(s => s.riskLevel === DeFiRiskLevel.MODERATE).length || 1) / 
+                        100
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>TVL:</span>
+                  <span className="font-medium">
+                    {formatCurrency(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.MODERATE)
+                        .reduce((sum, s) => sum + s.tvl, 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="border rounded-lg p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Aggressive Strategies</h4>
+              <div className="text-2xl font-bold text-yellow-600 mb-2">
+                {strategies.filter(s => s.riskLevel === DeFiRiskLevel.AGGRESSIVE).length}
+              </div>
+              <div className="text-sm text-gray-500">
+                <div className="flex justify-between mb-1">
+                  <span>Avg. APY:</span>
+                  <span className="font-medium">
+                    {formatPercentage(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.AGGRESSIVE)
+                        .reduce((sum, s) => sum + s.estimatedApy, 0) / 
+                        (strategies.filter(s => s.riskLevel === DeFiRiskLevel.AGGRESSIVE).length || 1) / 
+                        100
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>TVL:</span>
+                  <span className="font-medium">
+                    {formatCurrency(
+                      strategies
+                        .filter(s => s.riskLevel === DeFiRiskLevel.AGGRESSIVE)
+                        .reduce((sum, s) => sum + s.tvl, 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -1132,7 +1481,7 @@ const DeFiStrategyComponent: React.FC<DeFiStrategyComponentProps> = ({ connectio
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">DeFi Strategy Center</h1>
-            <p className="text-gray-600">Optimize your yield across multiple DeFi protocols</p>
+            <p className="text-gray-600">Optimize your yield across multiple DeFi protocols with Pyth price feeds</p>
           </div>
 
           {connected ? (

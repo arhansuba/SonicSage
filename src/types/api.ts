@@ -167,6 +167,7 @@ export interface TradeResult {
   timestamp: string;
   inputAmount?: number;
   outputAmount?: number;
+  txId?: string; // Add this field to support transaction IDs in the return value
 }
 
 /**

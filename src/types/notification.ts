@@ -9,7 +9,11 @@ export enum NotificationType {
   INFO = "info",
   SUCCESS = "success",
   WARNING = "warning",
-  ERROR = "error"
+  ERROR = "error",
+  TRADE = "trade",
+  MARKET = "market",
+  PORTFOLIO = "portfolio",
+  SYSTEM = "system"
 }
 
 /**
@@ -25,25 +29,26 @@ export enum NotificationPriority {
  * Notification categories
  */
 export enum NotificationCategory {
-  SYSTEM = "system",
+  GENERAL = "general",
   TRADE = "trade",
   MARKET = "market",
+  PORTFOLIO = "portfolio",
   SECURITY = "security",
-  ACCOUNT = "account"
+  SYSTEM = "system"
 }
 
 /**
  * Notification options for creating notifications
  */
 export interface NotificationOptions {
-  title: string;
-  message: string;
-  type: NotificationType;
-  priority?: NotificationPriority;
+  id?: string;
+  type?: NotificationType;
   category?: NotificationCategory;
+  title?: string;
+  persistent?: boolean;
   autoClose?: boolean;
-  duration?: number;
-  actions?: NotificationAction[];
+  timeout?: number;
+  data?: any;
 }
 
 /**
@@ -59,13 +64,14 @@ export interface NotificationAction {
  */
 export interface Notification {
   id: string;
+  type: NotificationType;
+  category: NotificationCategory;
   title: string;
   message: string;
-  type: NotificationType;
-  priority: NotificationPriority;
-  category: NotificationCategory;
-  timestamp: number;
+  timestamp: number | string | Date;
   read: boolean;
+  persistent: boolean;
+  data?: any;
   autoClose: boolean;
   duration: number;
   actions?: NotificationAction[];
@@ -92,4 +98,59 @@ export interface MarketEventPayload {
   tokenSymbol?: string;
   details: string;
   urgency: NotificationPriority;
+}
+
+/**
+ * Notification filter options
+ */
+export interface NotificationFilter {
+  type?: NotificationType[];
+  category?: NotificationCategory[];
+  readStatus?: boolean;
+  dateRange?: {
+    from: Date;
+    to: Date;
+  };
+}
+
+/**
+ * Performance data point interface
+ */
+export interface PerformanceDataPoint {
+  timestamp: number;
+  value: number;
+  profitLoss: number;
+}
+
+/**
+ * Asset interface for portfolio
+ */
+export interface Asset {
+  name: string;
+  symbol: string;
+  address: string;
+  amount: number;
+  price: number;
+  value: number;
+  change24h: number;
+  logo?: string;
+}
+
+/**
+ * Portfolio interface
+ */
+export interface Portfolio {
+  totalValue: number;
+  assets: Asset[];
+  lastUpdated: number;
+}
+
+/**
+ * Portfolio performance interface
+ */
+export interface PortfolioPerformance {
+  period: string;
+  totalChange: number;
+  percentChange: number;
+  dataPoints: PerformanceDataPoint[];
 }

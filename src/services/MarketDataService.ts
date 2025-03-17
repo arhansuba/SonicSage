@@ -121,6 +121,43 @@ export class MarketDataService {
   }
 
   /**
+   * Get token price changes for the last 24 hours
+   * 
+   * @param mints Array of token mint addresses
+   * @returns Map of mint addresses to price changes
+   */
+  public async getTokenPriceChanges(mints: string[]): Promise<Map<string, { change24h: number }>> {
+    const result = new Map<string, { change24h: number }>();
+
+    try {
+      // Use Jupiter Price API for bulk price fetching
+      const mintChunks = this.chunkArray(mints, 100); // Jupiter API limits to 100 tokens per request
+
+      for (const chunk of mintChunks) {
+        const priceResponse = await fetch(`${API.jupiter.price}?ids=${chunk.join(',')}`);
+
+        if (priceResponse.ok) {
+          const priceData = await priceResponse.json();
+
+          if (priceData.data) {
+            // Extract price changes from response
+            for (const [mint, data] of Object.entries(priceData.data)) {
+              // Check if price change exists and is valid
+              if (data && typeof data === 'object' && 'change24h' in data) {
+                result.set(mint, { change24h: parseFloat((data as any).change24h) });
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching token price changes:', error);
+    }
+
+    return result;
+  }
+
+  /**
    * Get market overview with sentiment and trends
    * 
    * @returns Market overview data

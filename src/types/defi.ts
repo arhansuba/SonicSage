@@ -20,7 +20,9 @@ export enum DeFiRiskLevel {
     LIQUIDITY_PROVIDING = "liquidity_providing",
     YIELD_FARMING = "yield_farming",
     STAKING = "staking",
-    OPTIONS = "options"
+    OPTIONS = "options",
+    DERIVATIVES = "derivatives",
+    INSURANCE = "insurance"
   }
   
   /**
@@ -80,17 +82,37 @@ export enum DeFiRiskLevel {
     description: string;
     protocolType: ProtocolType;
     riskLevel: DeFiRiskLevel;
-    expectedApy: number;
-    lockupPeriod: number; // in days
-    minInvestment: number;
-    maxInvestment: number;
-    verified: boolean;
+    estimatedApy: number;  // APY in basis points (e.g., 800 = 8.00%)
+    expectedApr?: number;  // APR in basis points
+    tags: string[];
+    tvl: number;
+    userCount: number;
     creatorAddress: string;
-    protocols: string[]; // List of protocols used in strategy
-    tvl: number; // Total value locked
-    userCount: number; // Number of users using this strategy
-    assetAllocation: AssetAllocation[];
-    platformFee: number;
+    lockupPeriod: number;
+    minInvestment: number;
+    feePercentage: number;
+    tokens: StrategyToken[];
+    verified: boolean;
+    protocols: ProtocolAllocation;
+    protocolConfig: any; // Specific protocol configuration
+    platforms?: string[];  // Additional platforms the strategy may use
+    createdAt?: string;    // ISO date string
+    updatedAt?: string;    // ISO date string
+  }
+  
+  /**
+   * DeFi Position interface
+   */
+  export interface DeFiPosition {
+    id: string;
+    strategyId: string;
+    userAddress: string;
+    amount: number;
+    entryTimestamp: number;
+    exitTimestamp?: number;
+    currentValue: number;
+    profitLoss: number;
+    isActive: boolean;
   }
   
   /**
@@ -143,4 +165,67 @@ export enum DeFiRiskLevel {
     assets: PortfolioAsset[];
     totalValue: number;
     performance: PortfolioPerformance;
+  }
+
+  /**
+   * Token structure in a strategy
+   */
+  export interface StrategyToken {
+    symbol: string;
+    mint: string;
+    allocation: number;
+  }
+  
+  /**
+   * Protocol allocation in a strategy
+   */
+  export interface ProtocolAllocation {
+    [protocol: string]: number;
+  }
+  
+  /**
+   * Strategy performance metrics
+   */
+  export interface StrategyPerformance {
+    id: string;
+    strategyId: string;
+    timeframe: '1d' | '7d' | '30d' | '90d' | 'all';
+    returns: number;
+    volatility: number;
+    sharpeRatio: number;
+    drawdown: number;
+    dataPoints: {
+      timestamp: number;
+      value: number;
+    }[];
+  }
+  
+  /**
+   * User strategy investment
+   */
+  export interface StrategyInvestment {
+    id: string;
+    userId: string;
+    strategyId: string;
+    investmentAmount: number;
+    investmentDate: string;
+    currentValue: number;
+    returns: number;
+    status: 'active' | 'pending' | 'withdrawn';
+  }
+  
+  /**
+   * Strategy creation parameters
+   */
+  export interface StrategyCreationParams {
+    name: string;
+    description: string;
+    protocolType: ProtocolType;
+    riskLevel: DeFiRiskLevel;
+    tokens: StrategyToken[];
+    lockupPeriod: number;
+    minInvestment: number;
+    feePercentage: number;
+    protocols: ProtocolAllocation;
+    protocolConfig?: any;
   }

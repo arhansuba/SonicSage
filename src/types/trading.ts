@@ -55,26 +55,19 @@ export interface StrategyPerformance {
 export interface TradeRecommendation {
   id: string;
   type: 'buy' | 'sell' | 'swap';
-  inputToken: {
-    address: string;
-    symbol: string;
-    logo?: string;
-  };
-  outputToken: {
-    address: string;
-    symbol: string;
-    logo?: string;
-  };
+  inputToken: string;
+  outputToken: string;
   inputAmount: number;
-  outputAmount: number;
+  estimatedOutputAmount: number;
   confidence: number;
-  reason: string;
+  rationale: string;
   timestamp: number;
   expiresAt: number;
-  status: 'pending' | 'executing' | 'completed' | 'failed' | 'expired';
+  status: 'pending' | 'executed' | 'expired' | 'rejected';
   priceImpact: number;
-  estimatedFee: number;
-  estimatedGas: number;
+  slippage: number;
+  fee: number;
+  route?: string[];
 }
 
 /**

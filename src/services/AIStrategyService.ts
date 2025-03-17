@@ -1,10 +1,12 @@
 // src/services/AIStrategyService.ts
+// src/services/AIStrategyService.ts
 
 import { Connection, PublicKey, Transaction, SystemProgram, Keypair } from '@solana/web3.js';
 import { AnchorProvider, Program, BN, web3 } from '@coral-xyz/anchor';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
-import { StrategyMarketplaceService, TradingStrategy, RiskLevel, TimeHorizon, AIModelType } from './StrategyMarketplace';
-import { NotificationService, NotificationType, NotificationCategory } from './NotificationService';
+import { StrategyMarketplaceService, TradingStrategy, RiskLevel, TimeHorizon, AIModelType, TokenSupportType } from './StrategyMarketplace';
+import { NotificationService } from './NotificationService';
+import { NotificationType } from '@/types/notification';
 
 // This would be imported from your program's IDL
 // For this example, we'll define a simplified interface
@@ -13,7 +15,7 @@ interface AIStrategyProgram {
     createStrategy: (
       id: string,
       name: string,
-      descriptionHash: string,
+      descriptionHash: string, 
       riskLevel: number,
       timeHorizon: number,
       aiModels: number,
@@ -203,22 +205,30 @@ export class AIStrategyService {
         default:
           bit = 0;
       }
-      aiModels |= (1 << bit);
+      if (aiModels !== null) {
+        if (aiModels !== null) {
+          if (aiModels !== null) {
+            if (aiModels !== null) {
+              aiModels |= (1 << bit);
+            }
+          }
+        }
+      }
     });
     
     // Convert token support
     let tokenSupport: number;
     switch (strategy.tokenSupport) {
-      case 'major_only':
+      case TokenSupportType.MAJOR_ONLY:
         tokenSupport = 0;
         break;
-      case 'major_and_medium':
+      case TokenSupportType.MAJOR_AND_MEDIUM:
         tokenSupport = 1;
         break;
-      case 'wide_coverage':
+      case TokenSupportType.WIDE_COVERAGE:
         tokenSupport = 2;
         break;
-      case 'custom_basket':
+      case TokenSupportType.CUSTOM_BASKET:
         tokenSupport = 3;
         break;
       default:
@@ -228,7 +238,7 @@ export class AIStrategyService {
     // Convert fees and minimum investment
     const managementFeeBps = Math.round(strategy.feePercentage * 100); // Convert to basis points
     const performanceFeeBps = Math.round(strategy.performanceFee * 100); // Convert to basis points
-    const minInvestment = new BN(Math.round(strategy.minInvestment || 0 * 1e9)); // Convert to lamports
+    const minInvestment = new BN(Math.round((strategy.minInvestment || 0) * 1e9)); // Convert to lamports
     
     // Create a description hash (in a real implementation, this would be IPFS CID or similar)
     const descriptionHash = `desc_${strategy.id}_${Date.now()}`;
@@ -311,22 +321,22 @@ export class AIStrategyService {
     }
     
     // Extract token support
-    let tokenSupport: 'major_only' | 'major_and_medium' | 'wide_coverage' | 'custom_basket';
+    let tokenSupport: TokenSupportType;
     switch (data.tokenSupport) {
       case 0:
-        tokenSupport = 'major_only';
+        tokenSupport = TokenSupportType.MAJOR_ONLY;
         break;
       case 1:
-        tokenSupport = 'major_and_medium';
+        tokenSupport = TokenSupportType.MAJOR_AND_MEDIUM;
         break;
       case 2:
-        tokenSupport = 'wide_coverage';
+        tokenSupport = TokenSupportType.WIDE_COVERAGE;
         break;
       case 3:
-        tokenSupport = 'custom_basket';
+        tokenSupport = TokenSupportType.CUSTOM_BASKET;
         break;
       default:
-        tokenSupport = 'major_only';
+        tokenSupport = TokenSupportType.MAJOR_ONLY;
     }
     
     // Build sample strategy (in real implementation, more data would be available)
@@ -401,26 +411,26 @@ export class AIStrategyService {
       );
       
       // Notify user
-      this.notificationService.notifyMarketEvent(
-        'Strategy Created',
-        `Your strategy '${strategy.name}' has been successfully created`,
-        NotificationType.SUCCESS,
-        {
+      this.notificationService.addNotification({
+        type: NotificationType.SUCCESS,
+        title: 'Strategy Created',
+        message: `Your strategy '${strategy.name}' has been successfully created`,
+        data: {
           strategyId: strategy.id,
           txid
         }
-      );
+      });
       
       return txid;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error registering strategy:', error);
       
       // Notify user of error
-      this.notificationService.notifyMarketEvent(
-        'Strategy Creation Failed',
-        `Failed to create strategy: ${error.message}`,
-        NotificationType.ERROR
-      );
+      this.notificationService.addNotification({
+        type: NotificationType.ERROR,
+        title: 'Strategy Creation Failed',
+        message: `Failed to create strategy: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
       
       throw error;
     }
@@ -515,27 +525,27 @@ export class AIStrategyService {
       const strategyData = await this.program!.account.aIStrategy.fetch(strategyPublicKey);
       
       // Notify user
-      this.notificationService.notifyTrade(
-        'Strategy Subscription',
-        `You have successfully subscribed to '${strategyData.name}' with ${investmentAmount} SOL`,
-        NotificationType.SUCCESS,
-        {
+      this.notificationService.addNotification({
+        type: NotificationType.SUCCESS,
+        title: 'Strategy Subscription',
+        message: `You have successfully subscribed to '${strategyData.name}' with ${investmentAmount} SOL`,
+        data: {
           strategyId: strategyData.id,
           amount: investmentAmount,
           txid
         }
-      );
+      });
       
       return txid;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error subscribing to strategy:', error);
       
       // Notify user of error
-      this.notificationService.notifyTrade(
-        'Strategy Subscription Failed',
-        `Failed to subscribe to strategy: ${error.message}`,
-        NotificationType.ERROR
-      );
+      this.notificationService.addNotification({
+        type: NotificationType.ERROR,
+        title: 'Strategy Subscription Failed',
+        message: `Failed to subscribe to strategy: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
       
       throw error;
     }
@@ -595,26 +605,26 @@ export class AIStrategyService {
       const strategyData = await this.program!.account.aIStrategy.fetch(strategyPublicKey);
       
       // Notify user
-      this.notificationService.notifyTrade(
-        'Strategy Unsubscription',
-        `You have successfully unsubscribed from '${strategyData.name}'`,
-        NotificationType.SUCCESS,
-        {
+      this.notificationService.addNotification({
+        type: NotificationType.SUCCESS,
+        title: 'Strategy Unsubscription',
+        message: `You have successfully unsubscribed from '${strategyData.name}'`,
+        data: {
           strategyId: strategyData.id,
           txid
         }
-      );
+      });
       
       return txid;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error unsubscribing from strategy:', error);
       
       // Notify user of error
-      this.notificationService.notifyTrade(
-        'Strategy Unsubscription Failed',
-        `Failed to unsubscribe from strategy: ${error.message}`,
-        NotificationType.ERROR
-      );
+      this.notificationService.addNotification({
+        type: NotificationType.ERROR,
+        title: 'Strategy Unsubscription Failed',
+        message: `Failed to unsubscribe from strategy: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
       
       throw error;
     }
@@ -645,7 +655,7 @@ export class AIStrategyService {
       let descriptionHash = null;
       let riskLevel = null;
       let timeHorizon = null;
-      let aiModels = null;
+      let aiModels: number | null = null;
       let tokenSupport = null;
       let managementFeeBps = null;
       let performanceFeeBps = null;
@@ -730,22 +740,22 @@ export class AIStrategyService {
             default:
               bit = 0;
           }
-          aiModels |= (1 << bit);
+          aiModels! |= (1 << bit);
         });
       }
       
       if (updates.tokenSupport) {
         switch (updates.tokenSupport) {
-          case 'major_only':
+          case TokenSupportType.MAJOR_ONLY:
             tokenSupport = 0;
             break;
-          case 'major_and_medium':
+          case TokenSupportType.MAJOR_AND_MEDIUM:
             tokenSupport = 1;
             break;
-          case 'wide_coverage':
+          case TokenSupportType.WIDE_COVERAGE:
             tokenSupport = 2;
             break;
-          case 'custom_basket':
+          case TokenSupportType.CUSTOM_BASKET:
             tokenSupport = 3;
             break;
         }
@@ -784,26 +794,26 @@ export class AIStrategyService {
       );
       
       // Notify user
-      this.notificationService.notifyMarketEvent(
-        'Strategy Updated',
-        `Your strategy '${strategyData.name}' has been successfully updated`,
-        NotificationType.SUCCESS,
-        {
+      this.notificationService.addNotification({
+        type: NotificationType.SUCCESS,
+        title: 'Strategy Updated',
+        message: `Your strategy '${strategyData.name}' has been successfully updated`,
+        data: {
           strategyId: strategyData.id,
           txid
         }
-      );
+      });
       
       return txid;
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Error updating strategy:', error);
       
       // Notify user of error
-      this.notificationService.notifyMarketEvent(
-        'Strategy Update Failed',
-        `Failed to update strategy: ${error.message}`,
-        NotificationType.ERROR
-      );
+      this.notificationService.addNotification({
+        type: NotificationType.ERROR,
+        title: 'Strategy Update Failed',
+        message: `Failed to update strategy: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
       
       throw error;
     }
@@ -907,70 +917,23 @@ export class AIStrategyService {
         try {
           const subscriptionData = await this.program!.account.strategySubscription.fetch(subscriptionAddress);
           
-          return {
-            strategyDetails,
-            userInvestment: subscriptionData.investmentAmount.toNumber() / 1e9,
-            userCurrentValue: subscriptionData.currentValue.toNumber() / 1e9,
-            userReturns: ((subscriptionData.currentValue.toNumber() / subscriptionData.investmentAmount.toNumber()) - 1) * 100,
-            userSubscriptionDate: new Date(subscriptionData.subscribedAt.toNumber() * 1000).toISOString()
-          };
-        } catch (error) {
-          // User is not subscribed
-          return { strategyDetails };
-        }
-      }
-      
-      return { strategyDetails };
-    } catch (error) {
-      console.error('Error fetching strategy performance:', error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Get aggregated stats for all strategies
-   */
-  public async getMarketplaceStats(): Promise<{
-    totalStrategies: number;
-    totalTVL: number;
-    totalSubscribers: number;
-    averageReturn: number;
-    topStrategies: TradingStrategy[];
-  }> {
-    this.checkInitialized();
-    
-    try {
-      // Get all strategies
-      const strategies = await this.program!.account.aIStrategy.all();
-      
-      // Calculate stats
-      let totalTVL = 0;
-      let totalSubscribers = 0;
-      let totalReturns = 0;
-      
-      const tradingStrategies = strategies.map(({ publicKey, account }) => {
-        totalTVL += account.tvl.toNumber() / 1e9;
-        totalSubscribers += account.subscriberCount.toNumber();
-        totalReturns += account.totalReturnsBps;
-        
-        return this.onChainToTradingStrategy(publicKey, account);
-      });
-      
-      // Sort by TVL to get top strategies
-      const topStrategies = [...tradingStrategies].sort((a, b) => b.tvl - a.tvl).slice(0, 5);
-      
-      return {
-        totalStrategies: strategies.length,
-        totalTVL,
-        totalSubscribers,
-        averageReturn: strategies.length > 0 ? totalReturns / strategies.length / 100 : 0, // Convert from basis points
-        topStrategies
-      };
-    } catch (error) {
-      console.error('Error fetching marketplace stats:', error);
-      throw error;
-    }
-  }
-}
-
-export default AIStrategyService;
+                    return {
+                      strategyDetails,
+                      userInvestment: subscriptionData.investmentAmount.toNumber() / 1e9,
+                      userCurrentValue: subscriptionData.currentValue.toNumber() / 1e9,
+                      userReturns: ((subscriptionData.currentValue.toNumber() / subscriptionData.investmentAmount.toNumber()) - 1) * 100,
+                      userSubscriptionDate: new Date(subscriptionData.subscribedAt.toNumber() * 1000).toISOString()
+                    };
+                  } catch (error) {
+                    console.error('Error fetching subscription data:', error);
+                    throw error;
+                  }
+                }
+          
+                return { strategyDetails };
+              } catch (error) {
+                console.error('Error fetching strategy performance:', error);
+                throw error;
+              }
+            }
+          }

@@ -68,3 +68,14 @@ export interface Observable<T> {
   value: T;
   set: (value: T) => void;
 }
+
+// Export ServiceResponse
+export type ServiceResponse<T> = {
+  success: boolean;
+  data?: T;
+  error?: string;
+  timestamp?: number; // Add timestamp property
+};
+
+// Export Nullable
+export type Nullable<T> = T | null;

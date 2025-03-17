@@ -1,18 +1,36 @@
 // src/services/RiskMonitorService.ts
 
 import { PublicKey } from '@solana/web3.js';
-import { DeFiStrategy, UserDeFiPosition } from './DeFiStrategyService';
+import { DeFiStrategy, UserPosition, DeFiRiskLevel, ProtocolType } from './DeFiStrategyService';
 import { AIOptimizationService, MarketCondition } from './AIOptimizationService';
-import { NotificationService, NotificationType } from './NotificationService';
+import { NotificationService } from './NotificationService';
+
+// Import NotificationType from types file
+import { NotificationType } from '@/types/notification';
+
+export enum RiskSeverity {
+  LOW = 'low',
+  MEDIUM = 'medium',
+  HIGH = 'high',
+  CRITICAL = 'critical'
+}
+
+export enum RiskType {
+  LIQUIDATION = 'liquidation',
+  IMPERMANENT_LOSS = 'impermanent_loss',
+  PROTOCOL_RISK = 'protocol_risk',
+  MARKET_VOLATILITY = 'market_volatility',
+  POSITION_DECLINE = 'position_decline'
+}
 
 export interface RiskAlert {
   id: string;
   timestamp: number;
-  severity: 'low' | 'medium' | 'high' | 'critical';
-  type: 'liquidation' | 'impermanent_loss' | 'protocol_risk' | 'market_volatility' | 'position_decline';
+  severity: RiskSeverity;
+  type: RiskType;
   message: string;
   positionId?: string;
-  strategyId?: string;
+  strategyId?: string; 
   details: Record<string, any>;
   read: boolean;
   actions: Array<{
@@ -29,6 +47,17 @@ export interface PositionRiskMetrics {
   concentrationRisk: number; // 0-10 scale
   protocolRisk: number; // 0-10 scale
   overallRiskScore: number; // 0-100 scale
+}
+
+// Extend UserPosition interface to include positionData property
+interface ExtendedUserPosition extends UserPosition {
+  positionData?: {
+    lendingInfo?: Array<{
+      healthFactor?: number;
+      [key: string]: any;
+    }>;
+    [key: string]: any;
+  };
 }
 
 export class RiskMonitorService {
@@ -62,7 +91,7 @@ export class RiskMonitorService {
    */
   public startMonitoring(
     wallet: PublicKey,
-    positions: UserDeFiPosition[],
+    positions: UserPosition[],
     strategies: DeFiStrategy[]
   ): void {
     const walletKey = wallet.toString();
@@ -86,7 +115,7 @@ export class RiskMonitorService {
           const strategy = strategies.find(s => s.id === position.strategyId);
           if (!strategy) continue;
           
-          await this.checkPositionRisks(wallet, position, strategy, marketCondition);
+          await this.checkPositionRisks(wallet, position as ExtendedUserPosition, strategy, marketCondition);
         }
         
         // Check for portfolio-level risks
@@ -169,7 +198,7 @@ export class RiskMonitorService {
    */
   private async checkPositionRisks(
     wallet: PublicKey,
-    position: UserDeFiPosition,
+    position: ExtendedUserPosition,
     strategy: DeFiStrategy,
     marketCondition: MarketCondition
   ): Promise<void> {
@@ -180,12 +209,14 @@ export class RiskMonitorService {
     const riskMetrics = this.calculatePositionRiskMetrics(position, strategy, marketCondition);
     
     // Check for liquidation risk in lending positions
-    if (strategy.protocolType === 'lending' && riskMetrics.healthFactor < 1.25) {
-      const severity = riskMetrics.healthFactor < 1.05 ? 'critical' : riskMetrics.healthFactor < 1.15 ? 'high' : 'medium';
+    if (strategy.protocolType === ProtocolType.LENDING && riskMetrics.healthFactor < 1.25) {
+      const severity = riskMetrics.healthFactor < 1.05 ? RiskSeverity.CRITICAL : 
+                      riskMetrics.healthFactor < 1.15 ? RiskSeverity.HIGH : 
+                      RiskSeverity.MEDIUM;
       
       // Create alert if doesn't already exist
       const existingAlert = walletAlerts.find(
-        alert => alert.type === 'liquidation' && alert.strategyId === strategy.id && !alert.read
+        alert => alert.type === RiskType.LIQUIDATION && alert.strategyId === strategy.id && !alert.read
       );
       
       if (!existingAlert) {
@@ -193,7 +224,7 @@ export class RiskMonitorService {
           id: `liquidation_${strategy.id}_${Date.now()}`,
           timestamp: Date.now(),
           severity,
-          type: 'liquidation',
+          type: RiskType.LIQUIDATION,
           message: `Liquidation risk detected in ${strategy.name} position. Health factor: ${riskMetrics.healthFactor.toFixed(2)}`,
           strategyId: strategy.id,
           positionId: position.strategyId,
@@ -221,26 +252,25 @@ export class RiskMonitorService {
         this.alerts.set(walletKey, walletAlerts);
         
         // Send notification to user
-        this.notificationService.notify(
-          wallet,
-          'Liquidation Risk',
-          `Your position in ${strategy.name} is at risk of liquidation. Health factor: ${riskMetrics.healthFactor.toFixed(2)}`,
-          severity === 'critical' ? NotificationType.ERROR : NotificationType.WARNING
-        );
+        this.notificationService.addNotification({
+          type: severity === RiskSeverity.CRITICAL ? NotificationType.ERROR : NotificationType.WARNING,
+          title: 'Liquidation Risk',
+          message: `Your position in ${strategy.name} is at risk of liquidation. Health factor: ${riskMetrics.healthFactor.toFixed(2)}`
+        });
       }
     }
     
     // Check for impermanent loss risk in liquidity positions
     if (
-      strategy.protocolType === 'liquidity_providing' && 
+      strategy.protocolType === ProtocolType.LIQUIDITY_PROVIDING && 
       riskMetrics.impermanentLossRisk > 7 &&
       marketCondition.volatilityIndex > 6
     ) {
-      const severity = riskMetrics.impermanentLossRisk > 8.5 ? 'high' : 'medium';
+      const severity = riskMetrics.impermanentLossRisk > 8.5 ? RiskSeverity.HIGH : RiskSeverity.MEDIUM;
       
       // Create alert if doesn't already exist
       const existingAlert = walletAlerts.find(
-        alert => alert.type === 'impermanent_loss' && alert.strategyId === strategy.id && !alert.read
+        alert => alert.type === RiskType.IMPERMANENT_LOSS && alert.strategyId === strategy.id && !alert.read
       );
       
       if (!existingAlert) {
@@ -248,7 +278,7 @@ export class RiskMonitorService {
           id: `impermanent_loss_${strategy.id}_${Date.now()}`,
           timestamp: Date.now(),
           severity,
-          type: 'impermanent_loss',
+          type: RiskType.IMPERMANENT_LOSS,
           message: `High risk of impermanent loss detected in ${strategy.name} position due to increased market volatility.`,
           strategyId: strategy.id,
           positionId: position.strategyId,
@@ -277,23 +307,22 @@ export class RiskMonitorService {
         this.alerts.set(walletKey, walletAlerts);
         
         // Send notification to user
-        this.notificationService.notify(
-          wallet,
-          'Impermanent Loss Risk',
-          `Your position in ${strategy.name} has high impermanent loss risk due to market volatility.`,
-          NotificationType.WARNING
-        );
+        this.notificationService.addNotification({
+          type: NotificationType.WARNING,
+          title: 'Impermanent Loss Risk',
+          message: `Your position in ${strategy.name} has high impermanent loss risk due to market volatility.`
+        });
       }
     }
     
     // Check for significant position decline
     const positionReturn = (position.investmentValue - position.initialInvestment) / position.initialInvestment;
     if (positionReturn < -0.15) {
-      const severity = positionReturn < -0.25 ? 'high' : 'medium';
+      const severity = positionReturn < -0.25 ? RiskSeverity.HIGH : RiskSeverity.MEDIUM;
       
       // Create alert if doesn't already exist
       const existingAlert = walletAlerts.find(
-        alert => alert.type === 'position_decline' && alert.strategyId === strategy.id && !alert.read
+        alert => alert.type === RiskType.POSITION_DECLINE && alert.strategyId === strategy.id && !alert.read
       );
       
       if (!existingAlert) {
@@ -301,7 +330,7 @@ export class RiskMonitorService {
           id: `position_decline_${strategy.id}_${Date.now()}`,
           timestamp: Date.now(),
           severity,
-          type: 'position_decline',
+          type: RiskType.POSITION_DECLINE,
           message: `Your position in ${strategy.name} has declined by ${Math.abs(positionReturn * 100).toFixed(1)}% from initial investment.`,
           strategyId: strategy.id,
           positionId: position.strategyId,
@@ -330,12 +359,11 @@ export class RiskMonitorService {
         this.alerts.set(walletKey, walletAlerts);
         
         // Send notification to user
-        this.notificationService.notify(
-          wallet,
-          'Position Decline',
-          `Your position in ${strategy.name} has declined by ${Math.abs(positionReturn * 100).toFixed(1)}%.`,
-          NotificationType.WARNING
-        );
+        this.notificationService.addNotification({
+          type: NotificationType.WARNING,
+          title: 'Position Decline',
+          message: `Your position in ${strategy.name} has declined by ${Math.abs(positionReturn * 100).toFixed(1)}%.`
+        });
       }
     }
   }
@@ -349,7 +377,7 @@ export class RiskMonitorService {
    */
   private async checkPortfolioRisks(
     wallet: PublicKey,
-    positions: UserDeFiPosition[],
+    positions: UserPosition[],
     strategies: DeFiStrategy[],
     marketCondition: MarketCondition
   ): Promise<void> {
@@ -375,7 +403,7 @@ export class RiskMonitorService {
         if (!strategy) continue;
         
         const existingAlert = walletAlerts.find(
-          alert => alert.type === 'protocol_risk' && 
+          alert => alert.type === RiskType.PROTOCOL_RISK && 
                   alert.details.riskType === 'concentration' && 
                   alert.strategyId === strategy.id && 
                   !alert.read
@@ -385,8 +413,8 @@ export class RiskMonitorService {
           const alert: RiskAlert = {
             id: `concentration_${strategy.id}_${Date.now()}`,
             timestamp: Date.now(),
-            severity: 'medium',
-            type: 'protocol_risk',
+            severity: RiskSeverity.MEDIUM,
+            type: RiskType.PROTOCOL_RISK,
             message: `High concentration risk: ${concPos.percentage.toFixed(1)}% of your portfolio is in ${strategy.name}.`,
             strategyId: strategy.id,
             details: {
@@ -414,12 +442,11 @@ export class RiskMonitorService {
           this.alerts.set(walletKey, walletAlerts);
           
           // Send notification to user
-          this.notificationService.notify(
-            wallet,
-            'Concentration Risk',
-            `${concPos.percentage.toFixed(1)}% of your portfolio is concentrated in a single strategy.`,
-            NotificationType.INFO
-          );
+          this.notificationService.addNotification({
+            type: NotificationType.INFO,
+            title: 'Concentration Risk',
+            message: `${concPos.percentage.toFixed(1)}% of your portfolio is concentrated in a single strategy.`
+          });
         }
       }
     }
@@ -428,7 +455,7 @@ export class RiskMonitorService {
     if (marketCondition.volatilityIndex > 7.5 && marketCondition.marketTrend === 'bear') {
       const aggressivePositions = positions.filter(pos => {
         const strategy = strategies.find(s => s.id === pos.strategyId);
-        return strategy && (strategy.riskLevel === 'aggressive' || strategy.riskLevel === 'experimental');
+        return strategy && (strategy.riskLevel === DeFiRiskLevel.AGGRESSIVE);
       });
       
       if (aggressivePositions.length > 0) {
@@ -437,15 +464,15 @@ export class RiskMonitorService {
         
         if (aggressivePercentage > 30) {
           const existingAlert = walletAlerts.find(
-            alert => alert.type === 'market_volatility' && !alert.read
+            alert => alert.type === RiskType.MARKET_VOLATILITY && !alert.read
           );
           
           if (!existingAlert) {
             const alert: RiskAlert = {
               id: `market_volatility_${Date.now()}`,
               timestamp: Date.now(),
-              severity: 'high',
-              type: 'market_volatility',
+              severity: RiskSeverity.HIGH,
+              type: RiskType.MARKET_VOLATILITY,
               message: `High market volatility detected. ${aggressivePercentage.toFixed(1)}% of your portfolio is in high-risk strategies.`,
               details: {
                 volatilityIndex: marketCondition.volatilityIndex,
@@ -473,12 +500,11 @@ export class RiskMonitorService {
             this.alerts.set(walletKey, walletAlerts);
             
             // Send notification to user
-            this.notificationService.notify(
-              wallet,
-              'Market Volatility Risk',
-              `High market volatility detected with significant exposure to high-risk strategies.`,
-              NotificationType.WARNING
-            );
+            this.notificationService.addNotification({
+              type: NotificationType.WARNING,
+              title: 'Market Volatility Risk',
+              message: `High market volatility detected with significant exposure to high-risk strategies.`
+            });
           }
         }
       }
@@ -492,7 +518,7 @@ export class RiskMonitorService {
    * @param marketCondition Current market conditions
    */
   private calculatePositionRiskMetrics(
-    position: UserDeFiPosition,
+    position: ExtendedUserPosition,
     strategy: DeFiStrategy,
     marketCondition: MarketCondition
   ): PositionRiskMetrics {
@@ -500,21 +526,24 @@ export class RiskMonitorService {
     let healthFactor = 2.0; // Default healthy value
     
     // If position has lending components, calculate health factor
-    if (strategy.protocolType === 'lending') {
-      const lendingPositions = position.positions.filter(p => p.type === 'Lending');
+    if (strategy.protocolType === ProtocolType.LENDING) {
+      // Check if position has any lending-related data
+      const positionData = position.positionData || {};
+      const lendingPositions = positionData.lendingInfo || [];
+      
       if (lendingPositions.length > 0) {
         // If we have position-specific health factors, use the minimum
-        const healthFactors = lendingPositions
-          .map(p => p.healthFactor)
-          .filter(h => h !== undefined) as number[];
+        const healthFactors: number[] = lendingPositions
+          .map((p: { healthFactor?: number }) => p.healthFactor)
+          .filter((h: number | undefined): h is number => h !== undefined);
           
         if (healthFactors.length > 0) {
           healthFactor = Math.min(...healthFactors);
         } else {
           // Generate simulated health factor
-          const baseHealth = strategy.riskLevel === 'conservative' ? 2.0 :
-                            strategy.riskLevel === 'moderate' ? 1.7 :
-                            strategy.riskLevel === 'aggressive' ? 1.4 : 1.2;
+          const baseHealth = strategy.riskLevel === DeFiRiskLevel.CONSERVATIVE ? 2.0 :
+                             strategy.riskLevel === DeFiRiskLevel.MODERATE ? 1.7 :
+                             strategy.riskLevel === DeFiRiskLevel.AGGRESSIVE ? 1.4 : 1.2;
                             
           // Apply market adjustment
           const marketAdjustment = marketCondition.volatilityIndex > 7 ? -0.3 :
@@ -527,19 +556,19 @@ export class RiskMonitorService {
     
     // Calculate volatility exposure
     let volatilityExposure = 0;
+    
     switch (strategy.riskLevel) {
-      case 'conservative':
+      case DeFiRiskLevel.CONSERVATIVE:
         volatilityExposure = 2;
         break;
-      case 'moderate':
+      case DeFiRiskLevel.MODERATE:
         volatilityExposure = 5;
         break;
-      case 'aggressive':
+      case DeFiRiskLevel.AGGRESSIVE:
         volatilityExposure = 7;
         break;
-      case 'experimental':
-        volatilityExposure = 9;
-        break;
+      default:
+        volatilityExposure = 5; // Default to moderate
     }
     
     // Adjust volatility exposure based on market conditions
@@ -548,11 +577,17 @@ export class RiskMonitorService {
     
     // Calculate impermanent loss risk for liquidity providing positions
     let impermanentLossRisk = 0;
-    if (strategy.protocolType === 'liquidity_providing') {
+    if (strategy.protocolType === ProtocolType.LIQUIDITY_PROVIDING) {
       // Base risk level based on strategy risk
-      impermanentLossRisk = strategy.riskLevel === 'conservative' ? 3 :
-                           strategy.riskLevel === 'moderate' ? 5 :
-                           strategy.riskLevel === 'aggressive' ? 7 : 8;
+      if (strategy.riskLevel === DeFiRiskLevel.CONSERVATIVE) {
+        impermanentLossRisk = 3;
+      } else if (strategy.riskLevel === DeFiRiskLevel.MODERATE) {
+        impermanentLossRisk = 5;
+      } else if (strategy.riskLevel === DeFiRiskLevel.AGGRESSIVE) {
+        impermanentLossRisk = 7;
+      } else {
+        impermanentLossRisk = 8; // Default for unknown risk levels
+      }
                            
       // Adjust based on market volatility
       impermanentLossRisk += (marketCondition.volatilityIndex - 5) * 0.4;

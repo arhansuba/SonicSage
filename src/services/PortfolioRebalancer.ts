@@ -6,6 +6,7 @@ import { SonicAgent } from './SonicAgent';
 import { JupiterService } from './JupiterService';
 import { MarketDataService } from './MarketDataService';
 import { NotificationService } from './NotificationService';
+import { NotificationType } from '@/types/notification';
 import { AgentConfig, Portfolio, PortfolioAllocation, PortfolioAsset, TradeResult } from '../types/api';
 
 /**
@@ -268,7 +269,7 @@ export class PortfolioRebalancer {
     try {
       // Notify start of rebalancing
       this.notificationService?.addNotification({
-        type: 'info',
+        type: NotificationType.INFO,
         title: 'Portfolio Rebalancing',
         message: `Starting rebalance with ${actions.length} actions`,
       });
@@ -332,7 +333,7 @@ export class PortfolioRebalancer {
             
             // Notify success
             this.notificationService?.addNotification({
-              type: 'success',
+              type: NotificationType.SUCCESS,
               title: 'Rebalance Action Completed',
               message: `Successfully ${action.operation === 'buy' ? 'bought' : 'sold'} ${action.fromSymbol} for ${action.toSymbol}`,
               link: {
@@ -347,7 +348,7 @@ export class PortfolioRebalancer {
             
             // Notify failure
             this.notificationService?.addNotification({
-              type: 'error',
+              type: NotificationType.ERROR,
               title: 'Rebalance Action Failed',
               message: `Failed to ${action.operation} ${action.fromSymbol} for ${action.toSymbol}: ${swapResult.error}`,
             });
@@ -363,7 +364,7 @@ export class PortfolioRebalancer {
           
           // Notify failure
           this.notificationService?.addNotification({
-            type: 'error',
+            type: NotificationType.ERROR,
             title: 'Rebalance Action Error',
             message: `Error during ${action.operation} ${action.fromSymbol} to ${action.toSymbol}: ${error instanceof Error ? error.message : 'Unknown error'}`,
           });
@@ -378,7 +379,7 @@ export class PortfolioRebalancer {
       
       // Notify completion
       this.notificationService?.addNotification({
-        type: result.success ? 'success' : 'warning',
+        type: result.success ? NotificationType.SUCCESS : NotificationType.WARNING,
         title: 'Portfolio Rebalancing Complete',
         message: `Completed ${result.executedActions} of ${actions.length} rebalance actions${result.failedActions > 0 ? ` (${result.failedActions} failed)` : ''}`,
       });
@@ -389,7 +390,7 @@ export class PortfolioRebalancer {
       
       // Notify error
       this.notificationService?.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Portfolio Rebalancing Failed',
         message: `Failed to complete portfolio rebalancing: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });

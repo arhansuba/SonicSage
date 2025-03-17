@@ -5,35 +5,33 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { 
   NotificationService, 
   Notification, 
-  NotificationType, 
-  NotificationCategory,
-  NotificationFilter
+  NotificationOptions
 } from '../services/NotificationService';
+import { NotificationType } from '@/types/notification';
 
 interface UseNotificationsResult {
   notifications: Notification[];
   unreadCount: number;
   isLoading: boolean;
   error: Error | null;
-  addNotification: (
-    title: string, 
-    message: string, 
-    type: NotificationType, 
-    category: NotificationCategory,
-    options?: Partial<Omit<Notification, 'id' | 'title' | 'message' | 'type' | 'category' | 'timestamp' | 'read'>>
-  ) => Notification;
-  markAsRead: (id: string) => void;
+  addNotification: (options: NotificationOptions) => Notification;
+  markAsRead: (id: string) => Notification | undefined;
   markAllAsRead: () => void;
-  deleteNotification: (id: string) => boolean;
+  removeNotification: (id: string) => boolean;
   clearNotifications: () => void;
-  getNotifications: (filter?: NotificationFilter) => Notification[];
-  notifyMarketEvent: (title: string, message: string, type: NotificationType, data?: any) => Notification;
-  notifyTrade: (title: string, message: string, type: NotificationType, data?: any) => Notification;
-  notifyPortfolio: (title: string, message: string, type: NotificationType, data?: any) => Notification;
+  getNotifications: () => Notification[];
+  notifyMarketEvent: (title: string, message: string, type: NotificationType, data?: any) => void;
+  notifyTrade: (message: string, options: { 
+    title: string; 
+    type: NotificationType; 
+    strategyId: string; 
+    amount: number; 
+    txid: string; 
+  }) => void;
   requestNotificationPermission: () => Promise<boolean>;
 }
 
-export const useNotifications = (filter?: NotificationFilter): UseNotificationsResult => {
+export const useNotifications = (): UseNotificationsResult => {
   const { publicKey } = useWallet();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
@@ -41,13 +39,13 @@ export const useNotifications = (filter?: NotificationFilter): UseNotificationsR
   const [error, setError] = useState<Error | null>(null);
   
   const notificationService = useRef<NotificationService>(NotificationService.getInstance());
-  const subscriptionId = useRef<string | null>(null);
+  const removeListener = useRef<(() => void) | null>(null);
   
   const fetchNotifications = useCallback(() => {
     try {
       setIsLoading(true);
       if (publicKey) {
-        const fetchedNotifications = notificationService.current.getNotifications(filter);
+        const fetchedNotifications = notificationService.current.getNotifications();
         setNotifications(fetchedNotifications);
         setUnreadCount(notificationService.current.getUnreadCount());
       } else {
@@ -60,123 +58,95 @@ export const useNotifications = (filter?: NotificationFilter): UseNotificationsR
     } finally {
       setIsLoading(false);
     }
-  }, [publicKey, filter]);
+  }, [publicKey]);
 
-  // Initialize notification service
+  // Initialize notification service and subscribe to updates
   useEffect(() => {
     if (publicKey) {
-      notificationService.current.initialize(publicKey);
       fetchNotifications();
       
       // Subscribe to notification events
-      subscriptionId.current = notificationService.current.subscribe(() => {
-        fetchNotifications();
+      if (removeListener.current) {
+        removeListener.current();
+      }
+      
+      removeListener.current = notificationService.current.addListener((updatedNotifications) => {
+        setNotifications(updatedNotifications);
+        setUnreadCount(notificationService.current.getUnreadCount());
       });
     }
     
     return () => {
-      if (subscriptionId.current) {
-        notificationService.current.unsubscribe(subscriptionId.current);
-        subscriptionId.current = null;
+      if (removeListener.current) {
+        removeListener.current();
+        removeListener.current = null;
       }
     };
   }, [publicKey, fetchNotifications]);
 
-  // Refetch when filter changes
-  useEffect(() => {
-    fetchNotifications();
-  }, [filter, fetchNotifications]);
-
   const addNotification = useCallback(
-    (
-      title: string, 
-      message: string, 
-      type: NotificationType, 
-      category: NotificationCategory,
-      options?: Partial<Omit<Notification, 'id' | 'title' | 'message' | 'type' | 'category' | 'timestamp' | 'read'>>
-    ): Notification => {
-      const notification = notificationService.current.addNotification({
-        title,
-        message,
-        type,
-        category,
-        ...options
-      });
-      
-      fetchNotifications();
-      return notification;
+    (options: NotificationOptions): Notification => {
+      return notificationService.current.addNotification(options);
     },
-    [fetchNotifications]
+    []
   );
 
   const markAsRead = useCallback(
-    (id: string): void => {
-      notificationService.current.markAsRead(id);
-      fetchNotifications();
+    (id: string): Notification | undefined => {
+      return notificationService.current.markAsRead(id);
     },
-    [fetchNotifications]
+    []
   );
 
   const markAllAsRead = useCallback(
     (): void => {
       notificationService.current.markAllAsRead();
-      fetchNotifications();
     },
-    [fetchNotifications]
+    []
   );
 
-  const deleteNotification = useCallback(
+  const removeNotification = useCallback(
     (id: string): boolean => {
-      const result = notificationService.current.deleteNotification(id);
-      fetchNotifications();
-      return result;
+      return notificationService.current.removeNotification(id);
     },
-    [fetchNotifications]
+    []
   );
 
   const clearNotifications = useCallback(
     (): void => {
       notificationService.current.clearNotifications();
-      fetchNotifications();
     },
-    [fetchNotifications]
+    []
   );
 
   const getNotifications = useCallback(
-    (customFilter?: NotificationFilter): Notification[] => {
-      return notificationService.current.getNotifications(customFilter);
+    (): Notification[] => {
+      return notificationService.current.getNotifications();
     },
     []
   );
 
   const notifyMarketEvent = useCallback(
-    (title: string, message: string, type: NotificationType, data?: any): Notification => {
-      const notification = notificationService.current.notifyMarketEvent(title, message, type, data);
-      fetchNotifications();
-      return notification;
+    (title: string, message: string, type: NotificationType, data?: any): void => {
+      notificationService.current.notifyMarketEvent(title, message, type, data);
     },
-    [fetchNotifications]
+    []
   );
 
   const notifyTrade = useCallback(
-    (title: string, message: string, type: NotificationType, data?: any): Notification => {
-      const notification = notificationService.current.notifyTrade(title, message, type, data);
-      fetchNotifications();
-      return notification;
+    (message: string, options: { 
+      title: string; 
+      type: NotificationType; 
+      strategyId: string; 
+      amount: number; 
+      txid: string; 
+    }): void => {
+      notificationService.current.notifyTrade(message, options);
     },
-    [fetchNotifications]
+    []
   );
 
-  const notifyPortfolio = useCallback(
-    (title: string, message: string, type: NotificationType, data?: any): Notification => {
-      const notification = notificationService.current.notifyPortfolio(title, message, type, data);
-      fetchNotifications();
-      return notification;
-    },
-    [fetchNotifications]
-  );
-
-  const requestNotificationPermission = useCallback(
+  const requestNotificationPermission = useCallback( 
     async (): Promise<boolean> => {
       return await notificationService.current.requestNotificationPermission();
     },
@@ -191,11 +161,11 @@ export const useNotifications = (filter?: NotificationFilter): UseNotificationsR
     addNotification,
     markAsRead,
     markAllAsRead,
-    deleteNotification,
+    removeNotification,
     clearNotifications,
     getNotifications,
     notifyMarketEvent,
     notifyTrade,
-    notifyPortfolio,
     requestNotificationPermission
   };
+};

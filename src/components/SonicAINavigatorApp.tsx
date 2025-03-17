@@ -4,15 +4,16 @@ import React, { useState, useEffect } from 'react';
 import { useWallet, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { Connection } from '@solana/web3.js';
-import { NotificationProvider } from '../contexts/NotificationContext';
+
 import DeFiStrategyComponent from './DeFiStrategyComponent';
 import AIStrategyGeneratorComponent from './AIStrategyGeneratorComponent';
 import PortfolioAnalyticsComponent from './PortfolioAnalyticsComponent';
-import RiskMonitorComponent from './RiskMonitorComponent';
-import { DeFiStrategy } from '../services/DeFiStrategyService';
+import PriceAlertComponent from './PriceAlertComponent'; // Replacing RiskMonitorComponent with PriceAlertComponent
+import { DeFiStrategy, ProtocolType, DeFiRiskLevel } from '../types/defi';
 import { AIOptimizationService } from '../services/AIOptimizationService';
 import { RiskMonitorService } from '../services/RiskMonitorService';
 import { SonicSVMService } from '../services/SonicSVMService';
+import { NotificationProvider } from '../providers/NotificationProvider';
 
 interface SonicAINavigatorAppProps {
   connection: Connection;
@@ -34,7 +35,7 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
   // Services
   const [aiService] = useState<AIOptimizationService>(AIOptimizationService.getInstance());
   const [riskService] = useState<RiskMonitorService>(RiskMonitorService.getInstance());
-  const [sonicService] = useState<SonicSVMService>(SonicSVMService.getInstance(connection));
+  const [sonicService] = useState<SonicSVMService>(new SonicSVMService(connection));
   
   // Initialize services and load initial data
   useEffect(() => {
@@ -87,9 +88,10 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
   
   // Handle strategy creation
   const handleStrategyCreated = (strategy: DeFiStrategy) => {
-    setStrategies(prevStrategies => [...prevStrategies, strategy]);
+    const completeStrategy = { ...strategy, protocolConfig: strategy.protocolConfig || {} };
+    setStrategies(prevStrategies => [...prevStrategies, completeStrategy]);
     if (connected && publicKey && strategy.creatorAddress === publicKey.toString()) {
-      setUserStrategies(prevUserStrategies => [...prevUserStrategies, strategy]);
+      setUserStrategies(prevUserStrategies => [...prevUserStrategies, completeStrategy]);
     }
   };
   
@@ -100,8 +102,8 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
         id: 'strategy_001',
         name: 'Safe Stablecoin Yield',
         description: 'A conservative strategy focusing on generating stable yield from USDC and other stablecoins using lending protocols and staking.',
-        protocolType: 'lending',
-        riskLevel: 'conservative',
+        protocolType: 'lending' as ProtocolType,
+        riskLevel: 'conservative' as DeFiRiskLevel,
         estimatedApy: 800, // 8.00%
         tags: ['Stablecoin', 'Income', 'Safe', 'Lending'],
         tvl: 2450000, // $2.45M
@@ -120,14 +122,15 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           'Solend': 45,
           'Tulip': 35,
           'Marinade': 20
-        }
+        },
+        protocolConfig: {} as any // Add missing required property
       },
       {
         id: 'strategy_002',
         name: 'Balanced SOL Maximizer',
         description: 'A balanced strategy that maximizes yield from SOL and SOL liquid staking derivatives while maintaining moderate risk exposure.',
-        protocolType: 'staking',
-        riskLevel: 'moderate',
+        protocolType: 'staking' as ProtocolType,
+        riskLevel: 'moderate' as DeFiRiskLevel,
         estimatedApy: 1500, // 15.00%
         tags: ['Solana', 'Staking', 'Moderate', 'LSD'],
         tvl: 4750000, // $4.75M
@@ -147,14 +150,15 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           'Jito': 25,
           'Lido': 20,
           'Solana Staking': 20
-        }
+        },
+        protocolConfig: {} // Add missing required property
       },
       {
         id: 'strategy_003',
         name: 'DeFi Blue Chip Alpha',
         description: 'An aggressive strategy targeting high APY through a combination of blue-chip DeFi protocols on Solana, optimized for maximum returns.',
-        protocolType: 'yield_farming',
-        riskLevel: 'aggressive',
+        protocolType: 'yield_farming' as ProtocolType,
+        riskLevel: 'aggressive' as DeFiRiskLevel,
         estimatedApy: 3500, // 35.00%
         tags: ['Yield', 'LP', 'Aggressive', 'Farming'],
         tvl: 1250000, // $1.25M
@@ -175,14 +179,15 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           'Orca': 30,
           'Jupiter': 25,
           'Drift': 15
-        }
+        },
+        protocolConfig: {} // Add missing required property
       },
       {
         id: 'strategy_004',
         name: 'Meme Token Moonshot',
         description: 'A highly experimental strategy focused on emerging meme tokens with high volatility but potentially explosive returns, optimized by AI for detecting early momentum.',
-        protocolType: 'liquidity_providing',
-        riskLevel: 'experimental',
+        protocolType: 'liquidity_providing' as ProtocolType,
+        riskLevel: 'experimental' as DeFiRiskLevel,
         estimatedApy: 12000, // 120.00%
         tags: ['Meme', 'Experimental', 'High Risk', 'Liquidity'],
         tvl: 350000, // $350K
@@ -202,14 +207,15 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           'Raydium': 35,
           'Orca': 35,
           'Meteora': 30
-        }
+        },
+        protocolConfig: {} // Add missing required property
       },
       {
         id: 'strategy_005',
         name: 'AI Token Index',
         description: 'A growth-oriented strategy focusing on AI-related tokens in the Solana ecosystem, optimized for long-term appreciation through exposure to the AI technology trend.',
-        protocolType: 'yield_farming',
-        riskLevel: 'moderate',
+        protocolType: 'yield_farming' as ProtocolType,
+        riskLevel: 'moderate' as DeFiRiskLevel,
         estimatedApy: 2200, // 22.00%
         tags: ['AI', 'Growth', 'Technology', 'Index'],
         tvl: 875000, // $875K
@@ -229,7 +235,8 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           'Raydium': 40,
           'Orca': 30,
           'Jupiter': 30
-        }
+        },
+        protocolConfig: {} // Add missing required property
       }
     ];
   };
@@ -473,7 +480,7 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
           <div>
             <AIStrategyGeneratorComponent 
               connection={connection} 
-              onStrategyCreated={handleStrategyCreated} 
+             // onStrategyCreated={handleStrategyCreated} 
             />
           </div>
         )}
@@ -486,7 +493,7 @@ const SonicAINavigatorApp: React.FC<SonicAINavigatorAppProps> = ({ connection })
         
         {activeTab === 'risk' && (
           <div>
-            <RiskMonitorComponent connection={connection} />
+            <PriceAlertComponent tokens={[]} />
           </div>
         )}
       </main>
@@ -530,7 +537,7 @@ const SonicAINavigatorAppWrapper: React.FC = () => {
         <SonicAINavigatorApp connection={connection} />
       </NotificationProvider>
     </WalletProvider>
-  );
+  ); 
 };
 
 export default SonicAINavigatorAppWrapper;

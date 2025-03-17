@@ -7,6 +7,7 @@ import { JupiterService } from './JupiterService';
 import { MarketDataService } from './MarketDataService';
 import { NotificationService } from './NotificationService';
 import { AgentConfig, RiskProfile, TradeResult, PortfolioAsset } from '../types/api';
+import { NotificationType } from './DeFiStrategyService';
 
 /**
  * Trade recommendation interface
@@ -284,9 +285,10 @@ export class JupiterTradingStrategy {
       
       // Notify error
       this.notificationService?.addNotification({
-        type: 'error',
+        //type: 'error',
         title: 'Trade Failed',
         message: error instanceof Error ? error.message : 'Unknown error executing trade',
+        type: NotificationType.INFO
       });
       
       return {

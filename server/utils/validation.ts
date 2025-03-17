@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { PublicKey } from '@solana/web3.js';
-import { ValidationError } from './errorHandlers';
+import * as nacl from 'tweetnacl';
+import * as bs58 from 'bs58';
 
 // Schema validation using JSON schema format
 const schemas: Record<string, Record<string, any>> = {
@@ -109,6 +110,82 @@ export const isValidPublicKey = (key: string): boolean => {
 };
 
 /**
+ * Validates a signature from a Solana wallet
+ * 
+ * @param walletAddress The wallet address that signed the message
+ * @param signature The base58 encoded signature
+ * @param message The original message that was signed
+ * @returns True if the signature is valid, false otherwise
+ */
+export const validateSignature = async (
+  walletAddress: string,
+  signature: string,
+  message: string
+): Promise<boolean> => {
+  try {
+    // Convert the wallet address to a PublicKey
+    const publicKey = new PublicKey(walletAddress);
+    
+    // Decode the signature from base58
+    const signatureUint8 = bs58.decode(signature);
+    
+    // Convert message to Uint8Array
+    const messageUint8 = new TextEncoder().encode(message);
+    
+    // Verify the signature
+    return nacl.sign.detached.verify(
+      messageUint8,
+      signatureUint8,
+      publicKey.toBytes()
+    );
+  } catch (error) {
+    console.error('Signature validation error:', error);
+    return false;
+  }
+};
+
+/**
+ * Validates a Solana wallet address
+ * 
+ * @param address The wallet address to validate
+ * @returns True if the address is valid, false otherwise
+ */
+export const validateWalletAddress = (address: string): boolean => {
+  try {
+    new PublicKey(address);
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
+ * Validates a price feed ID format
+ * 
+ * @param feedId The price feed ID to validate
+ * @returns True if the feed ID is valid, false otherwise
+ */
+export const validatePriceFeedId = (feedId: string): boolean => {
+  // Pyth price feed IDs are 64-character hex strings (32 bytes)
+  return /^0x[a-fA-F0-9]{64}$/.test(feedId);
+};
+
+/**
+ * Validates a token address on Sonic SVM
+ * 
+ * @param tokenAddress The token address to validate
+ * @returns True if the token address is valid, false otherwise
+ */
+export const validateTokenAddress = (tokenAddress: string): boolean => {
+  try {
+    new PublicKey(tokenAddress);
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+/**
  * Validate an object against a schema
  */
 export const validateObject = (data: any, schema: any): { valid: boolean; errors: string[] } => {
@@ -141,9 +218,6 @@ export const validateObject = (data: any, schema: any): { valid: boolean; errors
     valid: errors.length === 0,
     errors,
   };
-};
-
-  return errors;
 };
 
 /**
@@ -183,9 +257,6 @@ export const validate = (schemaName: string) => {
   };
 };
 
-/**
- * Validate a field against constraints
- */
 /**
  * Validate a single field against constraints
  */
@@ -260,3 +331,6 @@ const validateField = (field: string, value: any, constraints: any): string[] =>
       }
     }
   }
+
+  return errors;
+};

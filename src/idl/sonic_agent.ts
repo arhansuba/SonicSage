@@ -1,6 +1,7 @@
+import { SonicAgent } from '../services/SonicAgent';
 // src/idl/sonic_agent.ts
 
-export const IDL = {
+export const SonicAgentIDL = {
     "version": "0.1.0",
     "name": "sonic_agent",
     "instructions": [

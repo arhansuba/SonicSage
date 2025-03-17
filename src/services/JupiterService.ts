@@ -3,6 +3,7 @@
 import { Connection, Keypair, PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { Wallet } from '@coral-xyz/anchor';
 import { NotificationService } from './NotificationService';
+import { NotificationType } from '@/types/notification';
 import fetch from 'cross-fetch';
 import bs58 from 'bs58';
 
@@ -256,7 +257,7 @@ export class JupiterService {
       
       // Notify success
       this.notificationService?.addNotification({
-        type: 'success',
+        type: NotificationType.SUCCESS,
         title: 'Swap Executed',
         message: 'Your swap has been executed successfully',
         link: {
@@ -274,7 +275,7 @@ export class JupiterService {
       
       // Notify error
       this.notificationService?.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Swap Failed',
         message: error instanceof Error ? error.message : 'Unknown error executing swap',
       });
@@ -364,7 +365,7 @@ export class JupiterService {
       if (executeData.status === 'Success') {
         // Notify success
         this.notificationService?.addNotification({
-          type: 'success',
+          type: NotificationType.SUCCESS,
           title: 'Swap Executed',
           message: 'Your swap has been executed successfully via Jupiter Ultra',
           link: {
@@ -384,7 +385,7 @@ export class JupiterService {
       } else {
         // Notify error
         this.notificationService?.addNotification({
-          type: 'error',
+          type: NotificationType.ERROR,
           title: 'Swap Failed',
           message: executeData.error || 'Unknown error executing swap',
         });
@@ -402,7 +403,7 @@ export class JupiterService {
       
       // Notify error
       this.notificationService?.addNotification({
-        type: 'error',
+        type: NotificationType.ERROR,
         title: 'Swap Failed',
         message: error instanceof Error ? error.message : 'Unknown error executing swap',
       });

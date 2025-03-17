@@ -1,9 +1,12 @@
+import { Connection, Keypair } from '@solana/web3.js';
 import { JupiterService } from './JupiterService';
 import { SonicAgent } from './SonicAgent';
 import { JupiterTradingStrategy } from './JupiterTradingStrategy';
 import { PortfolioRebalancer } from './PortfolioRebalancer';
 import { MarketDataService } from './MarketDataService';
 import { NotificationService } from './NotificationService';
+import { DeFiStrategyService } from './DeFiStrategyService';
+import { AIOptimizationService } from './AIOptimizationService';
 import { 
   JUPITER_API_KEY, 
   OPENAI_API_KEY, 
@@ -19,20 +22,25 @@ import {
  * dependency injection, and lifecycle management.
  */
 export class ServiceFactory {
-  getPortfolioService() {
-      throw new Error('Method not implemented.');
-  }
   private static instance: ServiceFactory;
   
+  private connection: Connection | null = null;
   private jupiterService: JupiterService | null = null;
   private sonicAgent: SonicAgent | null = null;
   private jupiterTradingStrategy: JupiterTradingStrategy | null = null;
   private portfolioRebalancer: PortfolioRebalancer | null = null;
   private marketDataService: MarketDataService | null = null;
-  private notificationService: NotificationService | null = null;
+  private notificationService: NotificationService | undefined = undefined;
+  private defiStrategyService: DeFiStrategyService | null = null;
+  private aiOptimizationService: AIOptimizationService | null = null;
   
   private isInitialized: boolean = false;
   private initPromise: Promise<void> | null = null;
+  
+  /**
+   * Private constructor to enforce singleton pattern
+   */
+  private constructor() {}
   
   /**
    * Get the singleton instance of ServiceFactory
@@ -50,9 +58,10 @@ export class ServiceFactory {
   /**
    * Initialize all services
    * 
+   * @param connection Solana connection
    * @returns Promise that resolves when all services are initialized
    */
-  public async initialize(): Promise<void> {
+  public async initialize(connection: Connection): Promise<void> {
     // If already initialized or initializing, return existing promise
     if (this.isInitialized) {
       return Promise.resolve();
@@ -61,6 +70,9 @@ export class ServiceFactory {
     if (this.initPromise) {
       return this.initPromise;
     }
+    
+    // Store connection
+    this.connection = connection;
     
     // Start initialization
     this.initPromise = this.initializeInternal();
@@ -73,6 +85,10 @@ export class ServiceFactory {
    * @returns Promise that resolves when all services are initialized
    */
   private async initializeInternal(): Promise<void> {
+    if (!this.connection) {
+      throw new Error('Connection not set. Call initialize(connection) first.');
+    }
+    
     try {
       if (DEBUGGING_ENABLED) {
         console.log('Initializing services...');
@@ -81,56 +97,90 @@ export class ServiceFactory {
       
       // 1. Notification service (used by many other services)
       if (ENABLE_NOTIFICATIONS) {
-        this.notificationService = new NotificationService();
+        this.notificationService = NotificationService.getInstance();
         if (DEBUGGING_ENABLED) {
           console.log('NotificationService initialized');
         }
       }
       
       // 2. Jupiter service
-      this.jupiterService = new JupiterService(this.notificationService, JUPITER_API_KEY);
+      this.jupiterService = new JupiterService(
+        this.connection,
+        JUPITER_API_KEY,
+        this.notificationService
+      );
       if (DEBUGGING_ENABLED) {
         console.log('JupiterService initialized');
       }
       
       // 3. Market data service (depends on Jupiter service)
-      this.marketDataService = new MarketDataService(this.jupiterService);
-      if (DEBUGGING_ENABLED) {
-        console.log('MarketDataService initialized');
+      if (this.jupiterService) {
+        this.marketDataService = new MarketDataService(
+          this.connection, 
+          this.jupiterService
+        );
+        if (DEBUGGING_ENABLED) {
+          console.log('MarketDataService initialized');
+        }
       }
       
       // 4. Sonic agent service
-      this.sonicAgent = new SonicAgent(this.notificationService);
+      this.sonicAgent = new SonicAgent(
+        this.connection,
+        this.notificationService
+      );
       if (DEBUGGING_ENABLED) {
         console.log('SonicAgent initialized');
       }
       
       // 5. Jupiter trading strategy (depends on market data service and Jupiter service)
-      this.jupiterTradingStrategy = new JupiterTradingStrategy(
-        this.jupiterService,
-        this.marketDataService,
-        this.notificationService,
-        OPENAI_API_KEY
-      );
-      if (DEBUGGING_ENABLED) {
-        console.log('JupiterTradingStrategy initialized');
+      if (this.jupiterService && this.marketDataService && this.sonicAgent) {
+        this.jupiterTradingStrategy = new JupiterTradingStrategy(
+          this.connection,
+          this.sonicAgent,
+          this.jupiterService,
+          this.marketDataService,
+          this.notificationService
+        );
+        if (DEBUGGING_ENABLED) {
+          console.log('JupiterTradingStrategy initialized');
+        }
       }
       
       // 6. Portfolio rebalancer (depends on Jupiter trading strategy and Jupiter service)
-      this.portfolioRebalancer = new PortfolioRebalancer(
-        this.jupiterService,
-        this.jupiterTradingStrategy,
-        this.notificationService
-      );
-      if (DEBUGGING_ENABLED) {
-        console.log('PortfolioRebalancer initialized');
+      if (this.jupiterService && this.sonicAgent && this.marketDataService) {
+        this.portfolioRebalancer = new PortfolioRebalancer(
+          this.connection,
+          this.sonicAgent,
+          this.jupiterService,
+          this.marketDataService,
+          this.notificationService
+        );
+        if (DEBUGGING_ENABLED) {
+          console.log('PortfolioRebalancer initialized');
+        }
       }
       
-      // Start auto-trading if enabled
+      // 7. DeFi Strategy Service
+      this.defiStrategyService = DeFiStrategyService.getInstance(this.connection);
+      if (DEBUGGING_ENABLED) {
+        console.log('DeFiStrategyService initialized');
+      }
+      
+      // 8. AI Optimization Service
+      this.aiOptimizationService = AIOptimizationService.getInstance();
+      if (DEBUGGING_ENABLED) {
+        console.log('AIOptimizationService initialized');
+      }
+      
+      // Start automated services
       if (AUTO_TRADING_ENABLED && this.jupiterTradingStrategy) {
-        await this.jupiterTradingStrategy.startAutoTrading();
-        if (DEBUGGING_ENABLED) {
-          console.log('Auto-trading initialized');
+        // Only start auto trading if explicitly defined in the JupiterTradingStrategy
+        if (typeof (this.jupiterTradingStrategy as any).startAutoTrading === 'function') {
+          await (this.jupiterTradingStrategy as any).startAutoTrading();
+          if (DEBUGGING_ENABLED) {
+            console.log('Auto-trading initialized');
+          }
         }
       }
       
@@ -247,15 +297,51 @@ export class ServiceFactory {
   /**
    * Get NotificationService instance
    * 
-   * @returns NotificationService instance or null if notifications are disabled
+   * @returns NotificationService instance or undefined if notifications are disabled
    * @throws Error if service is not initialized
    */
-  public getNotificationService(): NotificationService | null {
+  public getNotificationService(): NotificationService | undefined {
     if (!this.isInitialized) {
       throw new Error('Services not initialized. Call initialize() first.');
     }
     
     return this.notificationService;
+  }
+  
+  /**
+   * Get DeFiStrategyService instance
+   * 
+   * @returns DeFiStrategyService instance
+   * @throws Error if service is not initialized
+   */
+  public getDeFiStrategyService(): DeFiStrategyService {
+    if (!this.isInitialized) {
+      throw new Error('Services not initialized. Call initialize() first.');
+    }
+    
+    if (!this.defiStrategyService) {
+      throw new Error('DeFiStrategyService not available');
+    }
+    
+    return this.defiStrategyService;
+  }
+  
+  /**
+   * Get AIOptimizationService instance
+   * 
+   * @returns AIOptimizationService instance
+   * @throws Error if service is not initialized
+   */
+  public getAIOptimizationService(): AIOptimizationService {
+    if (!this.isInitialized) {
+      throw new Error('Services not initialized. Call initialize() first.');
+    }
+    
+    if (!this.aiOptimizationService) {
+      throw new Error('AIOptimizationService not available');
+    }
+    
+    return this.aiOptimizationService;
   }
   
   /**
@@ -273,25 +359,34 @@ export class ServiceFactory {
     // 1. Stop auto-trading if enabled
     if (AUTO_TRADING_ENABLED && this.jupiterTradingStrategy) {
       try {
-        await this.jupiterTradingStrategy.stopAutoTrading();
-        if (DEBUGGING_ENABLED) {
-          console.log('Auto-trading stopped');
+        // Only stop auto trading if explicitly defined in the JupiterTradingStrategy
+        if (typeof (this.jupiterTradingStrategy as any).stopAutoTrading === 'function') {
+          await (this.jupiterTradingStrategy as any).stopAutoTrading();
+          if (DEBUGGING_ENABLED) {
+            console.log('Auto-trading stopped');
+          }
         }
       } catch (error) {
         console.error('Error stopping auto-trading:', error);
       }
     }
     
-    // 2. Portfolio rebalancer
+    // 2. AI Optimization Service
+    this.aiOptimizationService = null;
+    
+    // 3. DeFi Strategy Service
+    this.defiStrategyService = null;
+    
+    // 4. Portfolio rebalancer
     this.portfolioRebalancer = null;
     
-    // 3. Jupiter trading strategy
+    // 5. Jupiter trading strategy
     this.jupiterTradingStrategy = null;
     
-    // 4. Sonic agent
+    // 6. Sonic agent
     this.sonicAgent = null;
     
-    // 5. Market data service
+    // 7. Market data service
     if (this.marketDataService) {
       try {
         this.marketDataService.clearCache();
@@ -301,11 +396,14 @@ export class ServiceFactory {
       this.marketDataService = null;
     }
     
-    // 6. Jupiter service
+    // 8. Jupiter service 
     this.jupiterService = null; 
     
-    // 7. Notification service
-    this.notificationService = null;
+    // 9. Notification service
+    this.notificationService = undefined;
+    
+    // 10. Connection
+    this.connection = null;
     
     // Reset initialization state
     this.isInitialized = false;

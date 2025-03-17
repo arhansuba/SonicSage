@@ -1,344 +1,529 @@
-// src/services/SonicSVMService.ts
-
-import { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { DeFiRiskLevel, DeFiStrategy, ProtocolType, UserDeFiPosition } from './DeFiStrategyService';
-
-/**
- * Interface for Sonic SVM transaction response
- */
-interface SonicTransactionResponse {
-  signature: string;
-  status: 'success' | 'error';
-  error?: string;
-  txid?: string;
-  blockTime?: number;
-}
+import { ConfirmOptions, Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction, VersionedTransaction } from '@solana/web3.js';
+import { API, RPC_URL } from '../constants/endpoints';
+import { Program, AnchorProvider, web3, BN } from '@project-serum/anchor';
+import { SonicAgentIDL } from '../idl/sonic_agent';
+import { ServiceResponse, Nullable } from '../types/index';
+import * as borsh from 'borsh';
+import * as spl from '@solana/spl-token';
 
 /**
  * Service for interacting with Sonic SVM
  */
 export class SonicSVMService {
-  private static instance: SonicSVMService;
   private connection: Connection;
-  
-  private constructor(connection: Connection) {
+  private programId: PublicKey;
+  private program: Program;
+  private provider: AnchorProvider;
+
+  constructor(connection: Connection) {
     this.connection = connection;
+    this.programId = new PublicKey('SVMAgntPgmd1V2k1eZRx6d7w6RVKR3cdxzZZ3Qcx1M9');
+    
+    // Create provider from connection
+    const wallet = window.solana;
+    const opts: ConfirmOptions = {
+      preflightCommitment: 'processed',
+      commitment: 'processed' as web3.Commitment,
+    };
+    this.provider = new AnchorProvider(connection, wallet, opts);
+    
+    // Initialize program
+    this.program = new Program(SonicAgentIDL as any, this.programId, this.provider);
   }
-  
+
   /**
-   * Get singleton instance
+   * Get the account data for a given user or token account
    */
-  public static getInstance(connection: Connection): SonicSVMService {
-    if (!SonicSVMService.instance) {
-      SonicSVMService.instance = new SonicSVMService(connection);
-    }
-    return SonicSVMService.instance;
-  }
-  
-  /**
-   * Get program ID for the Sonic SVM
-   */
-  public getSonicProgramId(): PublicKey {
-    // This would be the actual program ID deployed on Solana
-    return new PublicKey('SonicABCD1234567890ABCDEF1234567890ABCDEF12');
-  }
-  
-  /**
-   * Deploy a new DeFi strategy to Sonic SVM
-   * @param wallet User's wallet public key
-   * @param strategy Strategy configuration
-   */
-  public async deployStrategy(
-    wallet: PublicKey,
-    strategy: Omit<DeFiStrategy, 'id' | 'creatorAddress' | 'verified' | 'tvl' | 'userCount'>
-  ): Promise<{ success: boolean; strategyId?: string; error?: string }> {
+  public async getAccountData(accountPublicKey: PublicKey): Promise<ServiceResponse<any>> {
     try {
-      console.log(`Deploying strategy "${strategy.name}" to Sonic SVM...`);
+      const accountInfo = await this.connection.getAccountInfo(accountPublicKey);
       
-      // In production, this would create and send a Solana transaction
-      // For the prototype, we're simulating the deployment
-      await this.simulateSonicTransaction();
+      if (!accountInfo) {
+        return {
+          success: false,
+          error: 'Account not found',
+          timestamp: Date.now()
+        };
+      }
+
+      return {
+        success: true,
+        data: accountInfo,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error('Error fetching account data:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error fetching account data',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Get a user's token balances on Sonic SVM
+   */
+  public async getUserTokenBalances(userPublicKey: PublicKey): Promise<ServiceResponse<any>> {
+    try {
+      // Fetch token accounts for the user
+      const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+        userPublicKey,
+        { programId: spl.TOKEN_PROGRAM_ID }
+      );
+
+      // Process token balances and get additional data
+      const balancesPromises = tokenAccounts.value.map(async (account) => {
+        const { mint, tokenAmount } = account.account.data.parsed.info;
+        const mintPublicKey = new PublicKey(mint);
+        
+        // Get token metadata
+        let symbol = 'Unknown';
+        let logoURI = undefined;
+        let priceUsd = 0;
+        let priceChangePercentage24h = 0;
+        
+        try {
+          // Fetch price data from a service like CoinGecko or a custom API
+          const priceResponse = await fetch(`${API.server.market.prices}?mint=${mint}`);
+          const priceData = await priceResponse.json();
+          
+          if (priceData.success) {
+            symbol = priceData.data.symbol;
+            priceUsd = priceData.data.priceUsd;
+            priceChangePercentage24h = priceData.data.priceChangePercentage24h;
+            logoURI = priceData.data.logoURI;
+          }
+        } catch (e) {
+          console.error(`Error fetching price data for ${mint}:`, e);
+        }
+        
+        // Calculate USD value
+        const usdValue = tokenAmount.uiAmount * priceUsd;
+        
+        return {
+          mint,
+          symbol,
+          balance: tokenAmount.uiAmount,
+          decimals: tokenAmount.decimals,
+          usdValue,
+          priceUsd,
+          priceChangePercentage24h,
+          logoURI
+        };
+      });
       
-      // Generate a random ID for the new strategy
-      const strategyId = `strategy_${Math.random().toString(36).substring(2, 10)}`;
+      const balances = await Promise.all(balancesPromises);
+
+      return {
+        success: true,
+        data: balances,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error('Error fetching user token balances:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error fetching user token balances',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Execute a transaction on Sonic SVM
+   */
+  public async executeTransaction(instructions: TransactionInstruction[], signers: any[]): Promise<ServiceResponse<string>> {
+    try {
+      // Create a new transaction
+      const transaction = new Transaction();
+      
+      // Get recent blockhash
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = this.provider.wallet.publicKey;
+      
+      // Add instructions
+      instructions.forEach(instruction => {
+        transaction.add(instruction);
+      });
+      
+      // Sign transaction
+      if (signers.length > 0) {
+        transaction.partialSign(...signers);
+      }
+      
+      // Send transaction
+      const serializedTransaction = transaction.serialize({
+        requireAllSignatures: false,
+        verifySignatures: false,
+      });
+      
+      const signedTransaction = await this.provider.wallet.signTransaction(transaction);
+      const txid = await this.connection.sendRawTransaction(signedTransaction.serialize());
+      
+      // Confirm transaction
+      const confirmation = await this.connection.confirmTransaction({
+        blockhash,
+        lastValidBlockHeight,
+        signature: txid,
+      });
+      
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${confirmation.value.err.toString()}`);
+      }
       
       return {
         success: true,
-        strategyId
+        data: txid,
+        timestamp: Date.now()
       };
     } catch (error) {
-      console.error('Error deploying strategy to Sonic SVM:', error);
+      console.error('Error executing transaction:', error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Unknown error executing transaction',
+        timestamp: Date.now()
       };
     }
   }
-  
+
   /**
-   * Subscribe to a DeFi strategy
-   * @param wallet User's wallet
-   * @param strategyId ID of the strategy to subscribe to
-   * @param investmentAmounts Token amounts to invest
+   * Get transaction details
    */
-  public async subscribeToStrategy(
-    wallet: PublicKey,
-    strategyId: string,
-    investmentAmounts: {[tokenSymbol: string]: number}
-  ): Promise<SonicTransactionResponse> {
+  public async getTransactionDetails(signature: string): Promise<ServiceResponse<any>> {
     try {
-      console.log(`Subscribing to strategy ${strategyId} with amounts:`, investmentAmounts);
+      const transaction = await this.connection.getTransaction(signature, {
+        maxSupportedTransactionVersion: 0
+      });
       
-      // In production, this would create and send a Solana transaction
-      // For the prototype, we're simulating the transaction
-      await this.simulateSonicTransaction();
-      
-      return {
-        signature: `subscription_${Date.now()}`,
-        status: 'success',
-        txid: `${Math.random().toString(36).substring(2, 15)}`,
-        blockTime: Math.floor(Date.now() / 1000)
-      };
-    } catch (error) {
-      console.error('Error subscribing to strategy:', error);
-      return {
-        signature: `error_${Date.now()}`,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
-  
-  /**
-   * Unsubscribe from a DeFi strategy
-   * @param wallet User's wallet
-   * @param strategyId ID of the strategy to unsubscribe from
-   */
-  public async unsubscribeFromStrategy(
-    wallet: PublicKey,
-    strategyId: string
-  ): Promise<SonicTransactionResponse> {
-    try {
-      console.log(`Unsubscribing from strategy ${strategyId}`);
-      
-      // In production, this would create and send a Solana transaction
-      // For the prototype, we're simulating the transaction
-      await this.simulateSonicTransaction();
-      
-      return {
-        signature: `unsubscription_${Date.now()}`,
-        status: 'success',
-        txid: `${Math.random().toString(36).substring(2, 15)}`,
-        blockTime: Math.floor(Date.now() / 1000)
-      };
-    } catch (error) {
-      console.error('Error unsubscribing from strategy:', error);
-      return {
-        signature: `error_${Date.now()}`,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
-  
-  /**
-   * Rebalance a user's position in a strategy
-   * @param wallet User's wallet
-   * @param strategyId ID of the strategy to rebalance
-   */
-  public async rebalancePosition(
-    wallet: PublicKey,
-    strategyId: string
-  ): Promise<SonicTransactionResponse> {
-    try {
-      console.log(`Rebalancing position in strategy ${strategyId}`);
-      
-      // In production, this would create and send a Solana transaction
-      // For the prototype, we're simulating the transaction
-      await this.simulateSonicTransaction();
-      
-      return {
-        signature: `rebalance_${Date.now()}`,
-        status: 'success',
-        txid: `${Math.random().toString(36).substring(2, 15)}`,
-        blockTime: Math.floor(Date.now() / 1000)
-      };
-    } catch (error) {
-      console.error('Error rebalancing position:', error);
-      return {
-        signature: `error_${Date.now()}`,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
-  
-  /**
-   * Harvest rewards from a strategy position
-   * @param wallet User's wallet
-   * @param strategyId ID of the strategy to harvest rewards from
-   */
-  public async harvestRewards(
-    wallet: PublicKey,
-    strategyId: string
-  ): Promise<SonicTransactionResponse> {
-    try {
-      console.log(`Harvesting rewards from strategy ${strategyId}`);
-      
-      // In production, this would create and send a Solana transaction
-      // For the prototype, we're simulating the transaction
-      await this.simulateSonicTransaction();
-      
-      return {
-        signature: `harvest_${Date.now()}`,
-        status: 'success',
-        txid: `${Math.random().toString(36).substring(2, 15)}`,
-        blockTime: Math.floor(Date.now() / 1000)
-      };
-    } catch (error) {
-      console.error('Error harvesting rewards:', error);
-      return {
-        signature: `error_${Date.now()}`,
-        status: 'error',
-        error: error instanceof Error ? error.message : 'Unknown error'
-      };
-    }
-  }
-  
-  /**
-   * Get all user positions for a given wallet
-   * @param wallet User's wallet
-   */
-  public async getUserPositions(wallet: PublicKey): Promise<UserDeFiPosition[]> {
-    try {
-      console.log(`Fetching positions for wallet ${wallet.toString()}`);
-      
-      // In production, this would query the Sonic SVM program
-      // For the prototype, we're returning simulated data
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Generate some sample positions
-      const strategyIds = ['strategy_123', 'strategy_456', 'strategy_789'];
-      const positions: UserDeFiPosition[] = [];
-      
-      for (let i = 0; i < Math.min(strategyIds.length, 2 + Math.floor(Math.random() * 2)); i++) {
-        const initialInvestment = 1000 + Math.random() * 4000;
-        const returns = initialInvestment * (Math.random() * 0.3 - 0.05);
-        
-        positions.push({
-          strategyId: strategyIds[i],
-          initialInvestment,
-          investmentValue: initialInvestment + returns,
-          returns,
-          apy: 5 + Math.random() * 25,
-          subscriptionTime: Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000,
-          lastHarvestTime: Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000,
-          positions: this.generateRandomPositions()
-        });
+      if (!transaction) {
+        return {
+          success: false,
+          error: 'Transaction not found',
+          timestamp: Date.now()
+        };
       }
-      
-      return positions;
+
+      return {
+        success: true,
+        data: transaction,
+        timestamp: Date.now()
+      };
     } catch (error) {
-      console.error('Error fetching user positions:', error);
-      return [];
+      console.error('Error fetching transaction details:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error fetching transaction details',
+        timestamp: Date.now()
+      };
     }
   }
-  
+
   /**
-   * Get total value locked in Sonic SVM
+   * Create a new Sonic agent for a user
    */
-  public async getTotalValueLocked(): Promise<number> {
-    // In production, this would query the Sonic SVM program
-    // For the prototype, we're returning simulated data
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return 326500000 + Math.random() * 1000000;
-  }
-  
-  /**
-   * Execute a Sonic SVM strategy transaction
-   * @param wallet User's wallet keypair
-   * @param transaction Transaction to execute
-   */
-  public async executeStrategyTransaction(
-    wallet: Keypair,
-    transaction: Transaction
-  ): Promise<string> {
+  public async createAgent(userPublicKey: PublicKey, name: string): Promise<ServiceResponse<string>> {
     try {
-      // This would be an actual transaction to the Sonic SVM program
-      const signature = await sendAndConfirmTransaction(
-        this.connection,
-        transaction,
-        [wallet]
+      // Generate a new keypair for the agent account
+      const agentKeypair = web3.Keypair.generate();
+      
+      // Calculate the space needed for the account
+      const nameBuffer = Buffer.from(name);
+      const space = 8 + // discriminator
+                   32 + // owner pubkey
+                   4 + nameBuffer.length + // name string
+                   8 + // createdAt
+                   8 + // updatedAt
+                   4 + 8 * 10; // notification preferences array
+      
+      // Calculate rent exemption
+      const rent = await this.connection.getMinimumBalanceForRentExemption(space);
+      
+      // Create account instruction
+      const createAccountIx = SystemProgram.createAccount({
+        fromPubkey: userPublicKey,
+        newAccountPubkey: agentKeypair.publicKey,
+        lamports: rent,
+        space,
+        programId: this.programId
+      });
+      
+      // Initialize agent instruction
+      const initAgentIx = await this.program.methods.initialize(name)
+        .accounts({
+          agent: agentKeypair.publicKey,
+          owner: userPublicKey,
+          systemProgram: SystemProgram.programId
+        })
+        .instruction();
+      
+      // Execute transaction
+      const result = await this.executeTransaction(
+        [createAccountIx, initAgentIx],
+        [agentKeypair]
       );
       
-      return signature;
-    } catch (error) {
-      console.error('Error executing strategy transaction:', error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Simulate a Sonic SVM transaction (for demo purposes)
-   */
-  private async simulateSonicTransaction(): Promise<void> {
-    // Simulate network latency
-    const latency = 500 + Math.random() * 1500;
-    await new Promise(resolve => setTimeout(resolve, latency));
-    
-    // Simulate transaction failure (10% chance)
-    if (Math.random() < 0.1) {
-      throw new Error('Transaction simulation failed: transaction exceeded compute budget');
-    }
-  }
-  
-  /**
-   * Generate random position details for sample data
-   */
-  private generateRandomPositions(): Array<{
-    protocol: string;
-    type: string;
-    tokenA?: { symbol: string; value: number };
-    tokenB?: { symbol: string; value: number };
-    healthFactor?: number;
-  }> {
-    const protocols = ['Solend', 'Drift', 'Raydium', 'Orca', 'Meteora', 'Marinade'];
-    const types = ['Lending', 'Liquidity Pool', 'Staking', 'Options', 'Yield Farming'];
-    const tokens = ['SOL', 'USDC', 'ETH', 'BTC', 'BONK', 'JUP', 'RAY', 'ORCA'];
-    
-    const positions = [];
-    const numPositions = 1 + Math.floor(Math.random() * 3);
-    
-    for (let i = 0; i < numPositions; i++) {
-      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
-      const type = types[Math.floor(Math.random() * types.length)];
-      const tokenA = tokens[Math.floor(Math.random() * tokens.length)];
-      let tokenB = null;
-      
-      if (type === 'Liquidity Pool') {
-        // Ensure tokenB is different from tokenA
-        do {
-          tokenB = tokens[Math.floor(Math.random() * tokens.length)];
-        } while (tokenB === tokenA);
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to create agent');
       }
       
-      const position: any = {
-        protocol,
-        type,
-        tokenA: { symbol: tokenA, value: 500 + Math.random() * 2000 }
+      return {
+        success: true,
+        data: agentKeypair.publicKey.toString(),
+        timestamp: Date.now()
       };
-      
-      if (tokenB) {
-        position.tokenB = { symbol: tokenB, value: 500 + Math.random() * 2000 };
-      }
-      
-      if (type === 'Lending') {
-        position.healthFactor = 1 + Math.random() * 2;
-      }
-      
-      positions.push(position);
+    } catch (error) {
+      console.error('Error creating Sonic agent:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error creating Sonic agent',
+        timestamp: Date.now()
+      };
     }
-    
-    return positions;
+  }
+
+  /**
+   * Deposit tokens to a Sonic agent
+   */
+  public async depositToAgent(
+    userPublicKey: PublicKey,
+    agentPublicKey: PublicKey,
+    tokenMint: PublicKey,
+    amount: number
+  ): Promise<ServiceResponse<string>> {
+    try {
+      // Find associated token accounts
+      const userTokenAccount = await spl.getAssociatedTokenAddress(
+        tokenMint,
+        userPublicKey
+      );
+      
+      const agentTokenAccount = await spl.getAssociatedTokenAddress(
+        tokenMint,
+        agentPublicKey,
+        true // allowOwnerOffCurve
+      );
+      
+      // Check if agent token account exists
+      const agentTokenAccountInfo = await this.connection.getAccountInfo(agentTokenAccount);
+      
+      let instructions: TransactionInstruction[] = [];
+      
+      // If agent token account doesn't exist, create it
+      if (!agentTokenAccountInfo) {
+        instructions.push(
+          spl.createAssociatedTokenAccountInstruction(
+            userPublicKey,
+            agentTokenAccount,
+            agentPublicKey,
+            tokenMint
+          )
+        );
+      }
+      
+      // Create deposit instruction
+      const depositIx = await this.program.methods.deposit(new BN(amount))
+        .accounts({
+          agent: agentPublicKey,
+          owner: userPublicKey,
+          tokenMint,
+          userTokenAccount,
+          agentTokenAccount,
+          tokenProgram: spl.TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId
+        })
+        .instruction();
+      
+      instructions.push(depositIx);
+      
+      // Execute transaction
+      const result = await this.executeTransaction(instructions, []);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to deposit to agent');
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error depositing to Sonic agent:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error depositing to Sonic agent',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Withdraw tokens from a Sonic agent
+   */
+  public async withdrawFromAgent(
+    userPublicKey: PublicKey,
+    agentPublicKey: PublicKey,
+    tokenMint: PublicKey,
+    amount: number
+  ): Promise<ServiceResponse<string>> {
+    try {
+      // Find associated token accounts
+      const userTokenAccount = await spl.getAssociatedTokenAddress(
+        tokenMint,
+        userPublicKey
+      );
+      
+      const agentTokenAccount = await spl.getAssociatedTokenAddress(
+        tokenMint,
+        agentPublicKey,
+        true // allowOwnerOffCurve
+      );
+      
+      // Create withdraw instruction
+      const withdrawIx = await this.program.methods.withdraw(new BN(amount))
+        .accounts({
+          agent: agentPublicKey,
+          owner: userPublicKey,
+          tokenMint,
+          userTokenAccount,
+          agentTokenAccount,
+          tokenProgram: spl.TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId
+        })
+        .instruction();
+      
+      // Execute transaction
+      const result = await this.executeTransaction([withdrawIx], []);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to withdraw from agent');
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error withdrawing from Sonic agent:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error withdrawing from Sonic agent',
+        timestamp: Date.now()
+      };
+    }
+  }
+
+  /**
+   * Execute a strategy using a Sonic agent
+   */
+  public async executeStrategy(
+    userPublicKey: PublicKey,
+    agentPublicKey: PublicKey,
+    strategyPublicKey: PublicKey
+  ): Promise<ServiceResponse<string>> {
+    try {
+      // Create execute strategy instruction
+      const executeStrategyIx = await this.program.methods.executeStrategy()
+        .accounts({
+          strategy: strategyPublicKey,
+          agent: agentPublicKey,
+          owner: userPublicKey,
+          systemProgram: SystemProgram.programId
+        })
+        .instruction();
+      
+      // Execute transaction
+      const result = await this.executeTransaction([executeStrategyIx], []);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to execute strategy');
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error executing strategy:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error executing strategy',
+        timestamp: Date.now()
+      };
+    }
+  }
+  
+  /**
+   * Create a price alert
+   */
+  public async createPriceAlert(
+    userPublicKey: PublicKey,
+    agentPublicKey: PublicKey,
+    tokenMint: PublicKey,
+    triggerType: 'above' | 'below',
+    triggerPrice: number
+  ): Promise<ServiceResponse<string>> {
+    try {
+      // Generate a new keypair for the price alert account
+      const priceAlertKeypair = web3.Keypair.generate();
+      
+      // Calculate the space needed for the account
+      const space = 8 + // discriminator
+                   32 + // owner pubkey
+                   32 + // agent pubkey
+                   32 + // token mint
+                   1 + // trigger type enum
+                   8 + // trigger price
+                   1 + // is active
+                   1 + // triggered
+                   8 + // triggered at
+                   8; // created at
+      
+      // Calculate rent exemption
+      const rent = await this.connection.getMinimumBalanceForRentExemption(space);
+      
+      // Create account instruction
+      const createAccountIx = SystemProgram.createAccount({
+        fromPubkey: userPublicKey,
+        newAccountPubkey: priceAlertKeypair.publicKey,
+        lamports: rent,
+        space,
+        programId: this.programId
+      });
+      
+      // Determine trigger type enum variant
+      const triggerTypeEnum = triggerType === 'above' ? { above: {} } : { below: {} };
+      
+      // Create price alert instruction
+      const createPriceAlertIx = await this.program.methods.createPriceAlert(
+        triggerTypeEnum,
+        new BN(triggerPrice)
+      )
+        .accounts({
+          priceAlert: priceAlertKeypair.publicKey,
+          agent: agentPublicKey,
+          owner: userPublicKey,
+          tokenMint,
+          systemProgram: SystemProgram.programId
+        })
+        .instruction();
+      
+      // Execute transaction
+      const result = await this.executeTransaction(
+        [createAccountIx, createPriceAlertIx],
+        [priceAlertKeypair]
+      );
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to create price alert');
+      }
+      
+      return {
+        success: true,
+        data: priceAlertKeypair.publicKey.toString(),
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      console.error('Error creating price alert:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error creating price alert',
+        timestamp: Date.now()
+      };
+    }
   }
 }
+
+export default SonicSVMService;

@@ -1,9 +1,11 @@
 // src/services/NotificationService.ts
 
+import { NotificationType } from '@/types/notification';
+
 import { NOTIFICATION_SETTINGS } from '../constants/config';
 
 export interface NotificationOptions {
-  type: 'info' | 'success' | 'warning' | 'error';
+  type: NotificationType;
   title: string;
   message: string;
   read?: boolean;
@@ -27,6 +29,17 @@ type NotificationListener = (notifications: Notification[]) => void;
  * Service for managing in-app notifications
  */
 export class NotificationService {
+  notifyMarketEvent(arg0: string, arg1: string, SUCCESS: NotificationType, arg3: { strategyId: string; txid: string; }) {
+    throw new Error('Method not implemented.');
+  }
+  notifyTrade(message: string, options: { title: string; type: NotificationType; strategyId: string; amount: number; txid: string; }) {
+    this.addNotification({
+      type: options.type,
+      title: options.title,
+      message: `${message} (Strategy: ${options.strategyId}, Amount: ${options.amount}, TxID: ${options.txid})`,
+      data: { strategyId: options.strategyId, amount: options.amount, txid: options.txid }
+    });
+  }
   private static instance: NotificationService | null = null;
   private notifications: Notification[] = [];
   private listeners: NotificationListener[] = [];

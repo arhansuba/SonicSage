@@ -812,7 +812,7 @@ const TradingRecommendations: React.FC = () => {
       </div>
 
       {/* Trade details modal */}
-      {showTradeModal && selectedRecommendation && (
+      {showTradeModal && selectedRecommendation && ( 
         <TradeDetailsModal
           recommendation={selectedRecommendation}
           onClose={closeTradeDetails}

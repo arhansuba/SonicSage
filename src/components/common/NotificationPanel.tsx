@@ -1,15 +1,35 @@
 // src/components/common/NotificationPanel.tsx
 
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  NotificationService, 
-  Notification, 
-  NotificationType, 
-  NotificationCategory 
-} from '../../services/NotificationService';
+import { NotificationService, Notification, NotificationOptions } from '../../services/NotificationService';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { BellIcon, XIcon, CheckIcon, ExclamationIcon, InformationCircleIcon } from '@heroicons/react/outline';
 import { format } from 'date-fns';
+
+// Import heroicons correctly
+import { BellIcon, XMarkIcon, CheckIcon, ExclamationTriangleIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+
+// Define the notification types and categories since they aren't exported from NotificationService
+export enum NotificationType {
+  INFO = 'info',
+  SUCCESS = 'success',
+  WARNING = 'warning',
+  ERROR = 'error'
+}
+
+export enum NotificationCategory {
+  MARKET = 'market',
+  TRADE = 'trade',
+  PORTFOLIO = 'portfolio',
+  SYSTEM = 'system'
+}
+
+// Extended Notification type to match what we need in the component
+export interface ExtendedNotification extends Notification {
+  type: NotificationType;
+  category: NotificationCategory;
+  read: boolean;
+  actionUrl?: string;
+}
 
 interface NotificationPanelProps {
   maxHeight?: string;
@@ -21,7 +41,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
   showFilters = true 
 }) => {
   const { publicKey } = useWallet();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<ExtendedNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [selectedCategories, setSelectedCategories] = useState<NotificationCategory[]>(
@@ -31,28 +51,35 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
     Object.values(NotificationType)
   );
   const notificationService = useRef<NotificationService>(NotificationService.getInstance());
-  const subscriptionId = useRef<string | null>(null);
+  const removeListenerFn = useRef<(() => void) | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Initialize notification service when wallet changes
+  // Initialize notification service and load notifications
   useEffect(() => {
     if (publicKey) {
-      notificationService.current.initialize(publicKey);
+      // Load notifications (no initialization needed)
       loadNotifications();
       
-      // Request browser notification permission
+      // Request browser notification permission if available
       notificationService.current.requestNotificationPermission();
       
       // Subscribe to new notifications
-      subscriptionId.current = notificationService.current.subscribe((notification) => {
-        setNotifications(prev => [notification, ...prev]);
+      removeListenerFn.current = notificationService.current.addListener((newNotifications: Notification[]) => {
+        // Map to ExtendedNotification type
+        const extendedNotifications = newNotifications.map(notification => ({
+          ...notification,
+          type: notification.type as NotificationType,
+          category: (notification.data?.category || NotificationCategory.SYSTEM) as NotificationCategory,
+          read: notification.read ?? false,
+        }));
+        setNotifications(extendedNotifications);
         updateUnreadCount();
       });
     }
     
     return () => {
-      if (subscriptionId.current) {
-        notificationService.current.unsubscribe(subscriptionId.current);
+      if (removeListenerFn.current) {
+        removeListenerFn.current();
       }
     };
   }, [publicKey]);
@@ -75,13 +102,31 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
   const loadNotifications = () => {
     if (!publicKey) return;
     
-    const filteredNotifications = notificationService.current.getNotifications({
-      categories: selectedCategories,
-      types: selectedTypes
-    });
+    // Get notifications from service
+    let allNotifications: Notification[] = [];
     
-    setNotifications(filteredNotifications);
-    updateUnreadCount();
+    try {
+      allNotifications = notificationService.current.getNotifications();
+      
+      // Convert to ExtendedNotification and apply filters manually
+      const extendedNotifications = allNotifications.map(notification => ({
+        ...notification,
+        type: notification.type as NotificationType,
+        category: (notification.data?.category || NotificationCategory.SYSTEM) as NotificationCategory,
+        read: notification.read ?? false,
+      }));
+      
+      // Apply filters manually
+      const filtered = extendedNotifications.filter(notification => 
+        selectedCategories.includes(notification.category) && 
+        selectedTypes.includes(notification.type)
+      );
+      
+      setNotifications(filtered);
+      updateUnreadCount();
+    } catch (error) {
+      console.error('Error loading notifications:', error);
+    }
   };
 
   // Update the unread count
@@ -119,6 +164,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
   // Mark a notification as read
   const markAsRead = (id: string) => {
     notificationService.current.markAsRead(id);
+    
     setNotifications(prev => 
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
@@ -128,6 +174,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
   // Mark all notifications as read
   const markAllAsRead = () => {
     notificationService.current.markAllAsRead();
+    
     setNotifications(prev => 
       prev.map(n => ({ ...n, read: true }))
     );
@@ -136,7 +183,8 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
 
   // Delete a notification
   const deleteNotification = (id: string) => {
-    notificationService.current.deleteNotification(id);
+    notificationService.current.removeNotification(id);
+    
     setNotifications(prev => prev.filter(n => n.id !== id));
     updateUnreadCount();
   };
@@ -144,6 +192,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
   // Clear all notifications
   const clearNotifications = () => {
     notificationService.current.clearNotifications();
+    
     setNotifications([]);
     updateUnreadCount();
   };
@@ -154,9 +203,9 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
       case NotificationType.SUCCESS:
         return <CheckIcon className="h-5 w-5 text-green-500" />;
       case NotificationType.WARNING:
-        return <ExclamationIcon className="h-5 w-5 text-yellow-500" />;
+        return <ExclamationTriangleIcon className="h-5 w-5 text-yellow-500" />;
       case NotificationType.ERROR:
-        return <XIcon className="h-5 w-5 text-red-500" />;
+        return <XMarkIcon className="h-5 w-5 text-red-500" />;
       case NotificationType.INFO:
       default:
         return <InformationCircleIcon className="h-5 w-5 text-blue-500" />;
@@ -241,7 +290,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
                 <div className="flex flex-wrap gap-1 mt-1">
                   {Object.values(NotificationCategory).map((category) => (
                     <button
-                      key={category}
+                      key={String(category)}
                       className={`text-xs px-2 py-1 rounded-full ${
                         selectedCategories.includes(category)
                           ? 'bg-blue-500 text-white'
@@ -259,7 +308,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
                 <div className="flex flex-wrap gap-1 mt-1">
                   {Object.values(NotificationType).map((type) => (
                     <button
-                      key={type}
+                      key={String(type)}
                       className={`text-xs px-2 py-1 rounded-full ${
                         selectedTypes.includes(type)
                           ? 'bg-blue-500 text-white'
@@ -267,7 +316,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
                       }`}
                       onClick={() => handleTypeChange(type)}
                     >
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                      {String(type).charAt(0).toUpperCase() + String(type).slice(1)}
                     </button>
                   ))}
                 </div>
@@ -321,7 +370,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
                               deleteNotification(notification.id);
                             }}
                           >
-                            <XIcon className="h-4 w-4" />
+                            <XMarkIcon className="h-4 w-4" />
                           </button>
                         </div>
                         <p className="text-sm text-gray-600 mt-1">
@@ -335,16 +384,16 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
                             {format(notification.timestamp, 'MMM d, h:mm a')}
                           </span>
                         </div>
-                        {notification.actionUrl && (
+                        {notification.link && (
                           <div className="mt-2">
                             <a
-                              href={notification.actionUrl}
+                              href={notification.link.url}
                               className="text-sm text-blue-500 hover:text-blue-700"
                               onClick={(e) => e.stopPropagation()}
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              View details
+                              {notification.link.text}
                             </a>
                           </div>
                         )}
